@@ -156,7 +156,10 @@ const toolbar = {
       type: 'button', label: '파일 추가',
       on_click: {
         pick_files: {
-          accept: [{ mime: 'image/*' }, { mime: 'video/mp4', extensions: ['mp4'] }],
+          accept: [
+            { mime: 'image/*', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'heic', 'heif'] },
+            { mime: 'video/mp4', extensions: ['mp4', 'm4v'] },
+          ],
           multiple: true, client: 'pick',
         },
       },
@@ -272,7 +275,10 @@ const app = {
     device_storage: { prefixes: ['orig/'] },
   },
   file_drop: {
-    accept: [{ mime: 'image/*' }, { mime: 'video/mp4', extensions: ['mp4'] }],
+    accept: [
+      { mime: 'image/*', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'heic', 'heif'] },
+      { mime: 'video/mp4', extensions: ['mp4', 'm4v'] },
+    ],
     multiple: true,
     client: 'drop',
   },

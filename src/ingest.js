@@ -31,6 +31,20 @@ const MIME_EXT = {
   'video/mp4': 'mp4',
 };
 
+const EXT_MIME = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp',
+  heic: 'image/heic', heif: 'image/heif', mp4: 'video/mp4', m4v: 'video/mp4',
+};
+
+// macOS WebView에서 Finder로 끌어온 파일은 mime이 비어 올 수 있어 확장자로 채운다.
+function mimeOf(f) {
+  const mime = typeof f.mime === 'string' ? f.mime : '';
+  if (mime && mime !== 'application/octet-stream') return mime;
+  const m = /\.([A-Za-z0-9]+)$/.exec(String(f.name ?? ''));
+  return (m && EXT_MIME[m[1].toLowerCase()]) || mime;
+}
+
 function isSupported(mime) {
   return typeof mime === 'string' && (mime.startsWith('image/') || mime === 'video/mp4');
 }
@@ -74,19 +88,21 @@ async function putThumb(deps, cardId, b64) {
 export async function ingestFiles(files, deps) {
   const cards = [];
   for (const f of files ?? []) {
-    if (!f || !isSupported(f.mime)) continue;
+    if (!f) continue;
+    const mime = mimeOf(f);
+    if (!isSupported(mime)) continue;
     const card = newCard({
-      kind: f.mime === 'video/mp4' ? 'video' : 'image',
+      kind: mime === 'video/mp4' ? 'video' : 'image',
       title: String(f.name ?? ''),
       updatedAt: deps.now(),
     });
-    card.origKey = `orig/${card.id}.${extOf(f.name, f.mime)}`;
+    card.origKey = `orig/${card.id}.${extOf(f.name, mime)}`;
 
     let thumb = null;
     if (f.size !== 0) {
       try {
         const bytes = await deps.readBytes(f.id);
-        if (bytes && bytes.byteLength > 0) thumb = await safeThumb(deps, bytes, f.mime);
+        if (bytes && bytes.byteLength > 0) thumb = await safeThumb(deps, bytes, mime);
       } catch {
         thumb = null;
       }

@@ -287,3 +287,26 @@ test('글 카드: 첫 줄 40자 제목, 기본 색', async () => {
 test('빈 입력은 카드 없음', async () => {
   assert.deepEqual(await ingestText('   ', fakeDeps()), { card: null, full: false });
 });
+
+test('mime이 비었거나 octet-stream이면 확장자로 판별한다', async () => {
+  const deps = fakeDeps();
+  const { cards } = await ingestFiles([
+    file('j1', 'a.JPG', ''),
+    file('j2', 'a.JPG', 'application/octet-stream'),
+    file('v1', 'v.mp4', ''),
+    { id: 'p1', name: 'c.png', size: 3 },
+    file('t1', 'note.txt', ''),
+  ], deps);
+  assert.equal(cards.length, 4);
+  const [a, b, v, p] = cards;
+  assert.equal(a.kind, 'image');
+  assert.ok(a.origKey.endsWith('.jpg'));
+  assert.equal(a.hasThumb, true);
+  assert.equal(b.kind, 'image');
+  assert.ok(b.origKey.endsWith('.jpg'), b.origKey);
+  assert.equal(v.kind, 'video');
+  assert.ok(v.origKey.endsWith('.mp4'));
+  assert.equal(p.kind, 'image');
+  assert.deepEqual(deps.calls.makeThumb.slice(0, 2), ['image/jpeg', 'image/jpeg']);
+  assert.equal(deps.calls.makeThumb[3], 'image/png');
+});
