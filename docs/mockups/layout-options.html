@@ -1,0 +1,70 @@
+<h2>무드보드를 어떻게 보여 줄까요?</h2>
+<p class="subtitle">같은 자료 18개를 세 가지 방식으로 배치했습니다. 칸 하나가 썸네일 하나예요. ▶ 유튜브 · 🎞 MP4 · 📌 핀터레스트 · 🖼 이미지 · ✎ 글</p>
+
+<style>
+  .mb { background:#111; border-radius:10px; padding:14px; min-height:260px; }
+  .t { border-radius:6px; position:relative; overflow:hidden; color:#fff; font:600 11px/1.2 system-ui; }
+  .t .k { position:absolute; left:5px; top:4px; background:rgba(0,0,0,.45); padding:1px 5px; border-radius:4px; }
+  .t.txt { background:#f3efe6 !important; color:#333; padding:22px 8px 8px; font-weight:500; }
+  .t.txt::after { content:''; position:absolute; right:6px; bottom:6px; width:10px; height:10px; border-radius:50%; background:var(--c); }
+  .masonry { columns:6; column-gap:6px; }
+  .masonry .t { break-inside:avoid; margin-bottom:6px; }
+  .islands { display:flex; flex-wrap:wrap; gap:18px; }
+  .island { display:flex; flex-wrap:wrap; gap:4px; width:30%; align-content:flex-start; }
+  .island .t { width:calc(50% - 2px); height:54px; }
+  .island h5 { width:100%; margin:0 0 4px; color:#aaa; font:500 11px system-ui; display:flex; align-items:center; gap:6px; }
+  .island h5 i { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .free { position:relative; height:300px; }
+  .free .t { position:absolute; box-shadow:0 4px 12px rgba(0,0,0,.5); }
+  .bar { display:flex; gap:6px; margin-bottom:10px; }
+  .bar span { font:500 11px system-ui; color:#ccc; background:#222; padding:3px 8px; border-radius:20px; }
+  .bar span.on { background:#eee; color:#111; }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>무지개 벽돌 벽</h3>
+      <p>핀터레스트처럼 높이가 제각각인 카드를 색 순서(빨강→보라→무채색)로 이어 붙입니다. 훑어볼 때 색 흐름이 한눈에 들어와요.</p>
+      <div class="mb"><div class="bar"><span class="on">색 순서</span><span>최근 추가</span><span>종류별</span></div><div class="masonry" id="mA"></div></div>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>색 덩어리 섬</h3>
+      <p>비슷한 색끼리 묶어 "섬"을 만들고, 섬마다 대표 색을 붙입니다. 팔레트를 고르듯 볼 수 있고, 공유받은 사람도 구성을 이해하기 쉬워요.</p>
+      <div class="mb"><div class="islands" id="mB"></div></div>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>자유 캔버스 + 정렬 버튼</h3>
+      <p>평소에는 손으로 아무 데나 겹쳐 놓습니다(작업대 느낌). [색으로 정렬]을 누르면 A처럼 정리됐다가, 다시 누르면 내가 놓은 자리로 돌아갑니다.</p>
+      <div class="mb"><div class="bar"><span>색으로 정렬</span><span>내 배치</span></div><div class="free" id="mC"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const items = [
+    ['▶','#c0392b',90],['🖼','#e2583e',60],['✎','#d35400',0,'"빛이 부서지는 오후"'],['📌','#e67e22',110],
+    ['🎞','#f1c40f',70],['🖼','#d4ac0d',95],['📌','#7dcea0',80],['▶','#27ae60',60],
+    ['🖼','#16a085',120],['✎','#1abc9c',0,'청록, 젖은 콘크리트'],['🎞','#2e86c1',85],['📌','#1f4e79',65],
+    ['▶','#5b2c6f',100],['🖼','#8e44ad',70],['📌','#c39bd3',90],['🖼','#d5d8dc',60],['🎞','#566573',80],['▶','#1c1c1c',70]
+  ];
+  const tile = (it, style='') => it[0]==='✎'
+    ? `<div class="t txt" style="--c:${it[1]};${style}"><span class="k" style="background:#0002;color:#333">✎</span>${it[3]}</div>`
+    : `<div class="t" style="background:${it[1]};${style}"><span class="k">${it[0]}</span></div>`;
+  document.getElementById('mA').innerHTML = items.map(it => tile(it, it[2]?`height:${it[2]}px`:'')).join('');
+  const groups = [['따뜻한 색','#e2583e',0,6],['초록·청록','#1abc9c',6,10],['파랑','#2e86c1',10,12],['보라','#8e44ad',12,15],['무채색','#aab',15,18]];
+  document.getElementById('mB').innerHTML = groups.map(g =>
+    `<div class="island"><h5><i style="background:${g[1]}"></i>${g[0]} · ${g[3]-g[2]}</h5>${items.slice(g[2],g[3]).map(it=>tile(it, it[0]==='✎'?'height:54px;padding-top:18px;font-size:10px':'')).join('')}</div>`).join('');
+  let seed = 7; const r = () => (seed = (seed*9301+49297)%233280)/233280;
+  document.getElementById('mC').innerHTML = items.map(it => {
+    const w = 60 + r()*50, h = it[0]==='✎' ? 60 : 50 + r()*60;
+    return tile(it, `left:${r()*85}%;top:${r()*220}px;width:${w}px;height:${h}px;transform:rotate(${(r()-.5)*10}deg)`);
+  }).join('');
+</script>
