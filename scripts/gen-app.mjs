@@ -231,7 +231,7 @@ const renameDialog = {
 };
 
 const ui = {
-  type: 'stack', direction: 'column', gap: 'none', fill: 2,
+  type: 'stack', direction: 'column', gap: 'none', fill: 3, // 3 = split(캔버스+옆 칸)이 남은 높이를 채운다
   children: [
     toolbar,
     when('has_notice', { type: 'notice', message: c('notice') }),
