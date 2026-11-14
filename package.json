@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test 'test/**/*.test.js'",
-    "build": "esbuild src/main.js --bundle --format=iife --outfile=dist/moodboard.js"
+    "build": "esbuild src/main.js --bundle --format=iife --minify --outfile=dist/moodboard.js"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

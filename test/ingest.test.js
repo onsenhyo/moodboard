@@ -145,15 +145,15 @@ test('youtube: oEmbed 다음 hqdefault 순으로 읽고 title은 oEmbed', async 
   const deps = fakeDeps({
     httpRead: async (perm, path, query) => {
       deps.calls.http.push([perm, path, query]);
-      if (perm === 'yt_oembed') return json({ title: 'Never Gonna' });
+      if (perm === 'yt-oembed') return json({ title: 'Never Gonna' });
       return { bytes: new Uint8Array([9, 9]).buffer, mime: 'image/jpeg' };
     },
   });
   const { card, full } = await ingestText('https://youtu.be/dQw4w9WgXcQ', deps);
   assert.equal(full, false);
   assert.deepEqual(deps.calls.http, [
-    ['yt_oembed', '/oembed', { url: YT, format: 'json' }],
-    ['yt_thumb', '/vi/dQw4w9WgXcQ/hqdefault.jpg', {}],
+    ['yt-oembed', '/oembed', { url: YT, format: 'json' }],
+    ['yt-thumb', '/vi/dQw4w9WgXcQ/hqdefault.jpg', {}],
   ]);
   assert.equal(card.kind, 'youtube');
   assert.equal(card.url, YT);
@@ -176,7 +176,7 @@ test('youtube: oEmbed가 실패하면 링크 카드', async () => {
 test('youtube: 썸네일만 실패하면 youtube 카드, hasThumb false', async () => {
   const deps = fakeDeps({
     httpRead: async (perm) => {
-      if (perm === 'yt_oembed') return json({});
+      if (perm === 'yt-oembed') return json({});
       throw new Error('404');
     },
   });
@@ -190,25 +190,25 @@ test('youtube: 썸네일만 실패하면 youtube 카드, hasThumb false', async 
 test('youtube: 썸네일 저장 공간이 차면 카드 없이 full', async () => {
   const deps = fakeDeps({
     thumbs: fakeThumbs({ fullAfter: 0 }),
-    httpRead: async (perm) => (perm === 'yt_oembed' ? json({ title: 't' }) : { bytes: new Uint8Array([1]).buffer, mime: 'image/jpeg' }),
+    httpRead: async (perm) => (perm === 'yt-oembed' ? json({ title: 't' }) : { bytes: new Uint8Array([1]).buffer, mime: 'image/jpeg' }),
   });
   assert.deepEqual(await ingestText(YT, deps), { card: null, full: true });
 });
 
 const PIN = 'https://www.pinterest.com/pin/123456/';
 
-test('pinterest: oEmbed의 thumbnail_url 경로로 pin_img를 읽는다', async () => {
+test('pinterest: oEmbed의 thumbnail_url 경로로 pin-img를 읽는다', async () => {
   const deps = fakeDeps({
     httpRead: async (perm, path, query) => {
       deps.calls.http.push([perm, path, query]);
-      if (perm === 'pin_oembed') return json({ title: 'Nice pin', thumbnail_url: 'https://i.pinimg.com/736x/aa/bb.jpg' });
+      if (perm === 'pin-oembed') return json({ title: 'Nice pin', thumbnail_url: 'https://i.pinimg.com/736x/aa/bb.jpg' });
       return { bytes: new Uint8Array([7]).buffer, mime: 'image/jpeg' };
     },
   });
   const { card } = await ingestText('https://kr.pinterest.com/pin/123456/?foo=1', deps);
   assert.deepEqual(deps.calls.http, [
-    ['pin_oembed', '/oembed.json', { url: PIN }],
-    ['pin_img', '/736x/aa/bb.jpg', {}],
+    ['pin-oembed', '/oembed.json', { url: PIN }],
+    ['pin-img', '/736x/aa/bb.jpg', {}],
   ]);
   assert.equal(card.kind, 'pinterest');
   assert.equal(card.url, PIN);
@@ -218,7 +218,7 @@ test('pinterest: oEmbed의 thumbnail_url 경로로 pin_img를 읽는다', async 
 
 test('pinterest: title이 없으면 Pinterest', async () => {
   const deps = fakeDeps({
-    httpRead: async (perm) => (perm === 'pin_oembed'
+    httpRead: async (perm) => (perm === 'pin-oembed'
       ? json({ thumbnail_url: 'https://i.pinimg.com/236x/aa/bb.jpg' })
       : { bytes: new Uint8Array([7]).buffer, mime: 'image/jpeg' }),
   });
@@ -237,7 +237,7 @@ test('pinterest: 허용되지 않은 썸네일 주소는 읽지 않고 링크 �
     const { card } = await ingestText(PIN, deps);
     assert.equal(card.kind, 'link', String(thumb));
     assert.equal(card.url, PIN);
-    assert.deepEqual(deps.calls.http.map((c) => c[0]), ['pin_oembed']);
+    assert.deepEqual(deps.calls.http.map((c) => c[0]), ['pin-oembed']);
   }
 });
 
@@ -245,7 +245,7 @@ test('pinterest: oEmbed나 이미지 읽기가 실패하면 링크 카드', asyn
   assert.equal((await ingestText(PIN, fakeDeps())).card.kind, 'link');
   const deps = fakeDeps({
     httpRead: async (perm) => {
-      if (perm === 'pin_oembed') return json({ thumbnail_url: 'https://i.pinimg.com/736x/aa/bb.jpg' });
+      if (perm === 'pin-oembed') return json({ thumbnail_url: 'https://i.pinimg.com/736x/aa/bb.jpg' });
       throw new Error('500');
     },
   });

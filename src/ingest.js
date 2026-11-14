@@ -161,13 +161,13 @@ async function youtubeCard(videoId, deps) {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
   let meta;
   try {
-    meta = await readJson(deps, 'yt_oembed', '/oembed', { url, format: 'json' });
+    meta = await readJson(deps, 'yt-oembed', '/oembed', { url, format: 'json' });
   } catch {
     return { card: linkCard(url, deps), full: false };
   }
   let thumb = null;
   try {
-    const { bytes, mime } = await deps.httpRead('yt_thumb', `/vi/${videoId}/hqdefault.jpg`, {});
+    const { bytes, mime } = await deps.httpRead('yt-thumb', `/vi/${videoId}/hqdefault.jpg`, {});
     thumb = await safeThumb(deps, bytes, mime || 'image/jpeg');
   } catch {
     thumb = null;
@@ -190,7 +190,7 @@ async function pinterestCard(pinId, deps) {
   const fallback = () => ({ card: linkCard(url, deps), full: false });
   let meta;
   try {
-    meta = await readJson(deps, 'pin_oembed', '/oembed.json', { url });
+    meta = await readJson(deps, 'pin-oembed', '/oembed.json', { url });
   } catch {
     return fallback();
   }
@@ -198,7 +198,7 @@ async function pinterestCard(pinId, deps) {
   if (!path) return fallback();
   let thumb;
   try {
-    const { bytes, mime } = await deps.httpRead('pin_img', path, {});
+    const { bytes, mime } = await deps.httpRead('pin-img', path, {});
     thumb = await safeThumb(deps, bytes, mime || 'image/jpeg');
   } catch {
     return fallback();

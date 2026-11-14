@@ -9,8 +9,12 @@ import { makeThumb } from './thumb.js';
 import { reduce, initialState, placeNear, zoomAt, fitView, sortCols } from './interaction.js';
 import { createRenderer } from './render.js';
 import { createGate, retryRead, createSaver } from './startup.js';
+import { panelOutputs } from './panel.js';
+import { createPreview } from './preview.js';
 
 const SURFACE = 'board';
+const PREVIEW_SURFACE = 'preview';
+const EMBED_STATE = 'yt_embed';
 const SHARDS = 128;
 const DRAG_SAVE_MS = 400;
 const ZOOM_STEP = 1.25;
@@ -74,7 +78,10 @@ const scheduleSave = (ms = 0) => saver.schedule(ms);
 
 // --- 출력 ---
 
-const publishNotice = () => p.publish({ notice: notice ?? loadingNotice });
+function publishNotice() {
+  const text = notice ?? loadingNotice;
+  p.publish({ notice: text, has_notice: typeof text === 'string' && text !== '' });
+}
 function setNotice(text) {
   notice = text ?? null;
   publishNotice();
@@ -95,12 +102,26 @@ function youtubeId(url) {
   }
 }
 
+const preview = createPreview();
+let embedState; // 마지막으로 쓴 yt_embed. 같은 값을 다시 쓰지 않는다.
+
+// 옆 칸 출력. web_view의 url은 창 상태만 받으므로 유튜브 주소는 상태 yt_embed에도 쓴다.
+function publishPanel(selected) {
+  const panel = panelOutputs(selected);
+  p.publish({ selected, selected_url: selected?.url ?? null, ...panel });
+  if (panel.embed_url !== embedState) {
+    embedState = panel.embed_url;
+    p.setState(EMBED_STATE, panel.embed_url);
+  }
+  preview.show(panel.sel_thumb_preview ? selected.thumbDataUrl : null);
+}
+
 let selectSeq = 0;
 async function publishSelected() {
   const seq = ++selectSeq;
   const c = cardById(selectedId);
   if (!c) {
-    p.publish({ selected: null, selectedUrl: null });
+    publishPanel(null);
     return;
   }
   const [hasOrig, b64] = await Promise.all([
@@ -125,19 +146,19 @@ async function publishSelected() {
     const id = youtubeId(c.url);
     selected.embedUrl = id ? `https://www.youtube.com/embed/${id}` : null;
   }
-  p.publish({ selected, selectedUrl: c.url ?? null });
+  publishPanel(selected);
 }
 
 function publishBoards() {
   p.publish({
-    boardOptions: liveBoards().map((b) => ({ value: b.id, label: b.name })),
+    board_options: liveBoards().map((b) => ({ value: b.id, label: b.name })),
     board: boardId,
-    boardName: board()?.name ?? '',
+    board_label: board()?.name ?? '',
   });
 }
 
 function publishMode() {
-  p.publish({ mode: ui.mode, sorted: ui.mode === 'sorted' });
+  p.publish({ mode: ui.mode, sorted: ui.mode === 'sorted', manual_mode: ui.mode === 'manual' });
 }
 
 // --- 그리기 ---
@@ -349,12 +370,15 @@ p.handle('board_rename', ({ event } = {}) => {
   if (!b || !name) return;
   Object.assign(b, { name, updatedAt: Date.now() });
   p.setState('board_name', '');
+  p.setState('rename_open', false); // 동작 목록에 client를 섞을 수 없어 대화상자는 여기서 닫는다
   publishBoards();
   scheduleSave();
   clearNotice();
 });
 
 // --- 시작 ---
+
+p.onSurface(PREVIEW_SURFACE, (surface) => preview.attach(surface));
 
 p.onSurface(SURFACE, (surface) => {
   renderer.attach(surface);
@@ -406,7 +430,8 @@ function updateLoading() {
 const onReadFail = () => { if (!retrying) { retrying = true; updateLoading(); } };
 
 async function start() {
-  p.publish({ selected: null, selectedUrl: null, exportInfo: '', boardOptions: [], board: null, boardName: '' });
+  p.publish({ export_info: '', board_options: [], board: null, board_label: '' });
+  publishPanel(null);
   publishNotice();
   publishMode();
   const saved = p.getState('board');
