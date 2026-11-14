@@ -13,10 +13,13 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = readFileSync(join(ROOT, 'dist', 'moodboard.js'));
 const gz = gzipSync(src, { level: 9 }).toString('base64');
 
+// 풀기나 실행이 실패하면 프레임은 오류를 바깥으로 넘기지 않으므로, 선언한 출력 notice로 알린다.
 const loader =
-  '(async()=>{const b=Uint8Array.from(atob("' + gz + '"),c=>c.charCodeAt(0));' +
+  '(async()=>{if(typeof DecompressionStream==="undefined")throw new Error("DecompressionStream을 쓸 수 없습니다");' +
+  'const b=Uint8Array.from(atob("' + gz + '"),c=>c.charCodeAt(0));' +
   '(0,eval)(await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream("gzip"))).text())})()' +
-  '.catch(e=>console.error("moodboard: 번들을 풀지 못했습니다",e));\n';
+  '.catch(e=>{console.error("moodboard: 번들을 풀지 못했습니다",e);' +
+  'try{window.kaleidoscope.publish({notice:"앱을 불러오지 못했어요: "+(e&&e.message||String(e)),has_notice:true})}catch(_){}});\n';
 
 const out = join(ROOT, 'dist', 'moodboard.upload.js');
 const b64Out = join(ROOT, 'dist', 'moodboard.upload.b64');

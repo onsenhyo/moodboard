@@ -65,7 +65,7 @@
   "assets": [
     {
       "id": "moodboard",
-      "version": 2
+      "version": 3
     }
   ],
   "storage": {
@@ -1999,7 +1999,7 @@
     "runtime": "javascript",
     "entry": {
       "id": "moodboard",
-      "version": 2
+      "version": 3
     },
     "outputs": {
       "selected": {
