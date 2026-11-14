@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test 'test/**/*.test.js'",
-    "build": "esbuild src/main.js --bundle --format=iife --minify --outfile=dist/moodboard.js"
+    "build:viewer": "esbuild src/viewer/viewer.js --bundle --format=iife --minify --outfile=dist/viewer.txt",
+    "build": "npm run build:viewer && esbuild src/main.js --bundle --format=iife --minify --loader:.txt=text --outfile=dist/moodboard.js"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

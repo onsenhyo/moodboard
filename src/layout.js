@@ -2,6 +2,10 @@ import { colorSortKey } from './color.js';
 
 const RESIZE_PX = 12;
 
+// 색 정렬 격자의 칸 크기와 간격. 앱(main.js)과 내보낸 뷰어가 함께 쓴다.
+export const SORT_CELL = 200;
+export const SORT_GAP = 16;
+
 function compareKeys(a, b) {
   return a.group - b.group || a.hue - b.hue || b.light - a.light;
 }

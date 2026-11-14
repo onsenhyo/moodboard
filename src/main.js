@@ -2,7 +2,7 @@
 
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard } from './model.js';
-import { sortedLayout } from './layout.js';
+import { sortedLayout, SORT_CELL, SORT_GAP } from './layout.js';
 import { BOARDS_ENTRY, mergeBoards, saveWithRetry, shardIdOf, createThumbStore } from './store.js';
 import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
@@ -11,6 +11,9 @@ import { createRenderer } from './render.js';
 import { createGate, retryRead, createSaver } from './startup.js';
 import { panelOutputs } from './panel.js';
 import { createPreview } from './preview.js';
+import { planExport, buildExportChunks, exportMessages, runExport } from './export.js';
+// 빌드 1단계(npm run build:viewer)가 만든 뷰어 iife. esbuild text loader로 문자열이 된다.
+import VIEWER_JS from '../dist/viewer.txt';
 
 const SURFACE = 'board';
 const PREVIEW_SURFACE = 'preview';
@@ -18,8 +21,6 @@ const EMBED_STATE = 'yt_embed';
 const SHARDS = 128;
 const DRAG_SAVE_MS = 400;
 const ZOOM_STEP = 1.25;
-const SORT_CELL = 200;
-const SORT_GAP = 16;
 const FULL_NOTICE = '썸네일 저장 공간이 가득 찼어요 (약 1,200장)';
 const NO_ORIG_NOTICE = '원본은 다른 PC에 있어요';
 const DEFAULT_BOARD = '내 보드';
@@ -376,6 +377,70 @@ p.handle('board_rename', ({ event } = {}) => {
   clearNotice();
 });
 
+// --- 내보내기 ---
+
+let exporting = false;
+
+function publishExportInfo(text) {
+  p.publish({ export_info: text, has_export_info: text !== '' });
+}
+
+// 원본 영상을 열어 file id와 크기를 얻는다. 없거나 열지 못하면 null.
+async function openOrig(key) {
+  if (!key) return null;
+  try {
+    const f = await p.blobs.open(key);
+    return f && f.id ? { id: f.id, size: Number(f.size) } : null;
+  } catch {
+    return null;
+  }
+}
+
+// save_prompt는 선언한 client 동작 안에서만 열리므로 이 핸들러가 끝날 때까지 기다린다.
+p.handle('export', async () => {
+  if (exporting) return;
+  exporting = true;
+  try {
+    await ready.run(async () => {
+      const b = board();
+      if (!b) return;
+      const cards = liveCards();
+      const thumbB64 = new Map();
+      for (const c of cards) {
+        if (!c.hasThumb || !thumbs) continue;
+        const v = await thumbs.get(c.id).catch(() => null);
+        if (v) thumbB64.set(c.id, v);
+      }
+      const origs = new Map();
+      for (const c of cards) {
+        if (c.kind === 'video' && c.includeVideo) origs.set(c.id, await openOrig(c.origKey));
+      }
+      const plan = planExport(b, {
+        thumbSizes: new Map([...thumbB64].map(([id, v]) => [id, (v.length * 3) / 4])),
+        origSizes: new Map([...origs].map(([id, f]) => [id, f ? f.size : null])),
+      });
+      const msg = exportMessages(b, plan);
+      publishExportInfo(msg.info);
+      if (msg.notice) { setNotice(msg.notice); return; }
+      const readers = {
+        thumb: async (id) => thumbB64.get(id) ?? null,
+        video: async (id) => {
+          const f = origs.get(id);
+          return f ? p.files.read(f.id) : null;
+        },
+        viewerJs: VIEWER_JS,
+      };
+      const snapshot = structuredClone(b);
+      const r = await runExport({ name: b.name, files: p.files, chunks: () => buildExportChunks(snapshot, plan, readers) });
+      if (r.status === 'done') setNotice(`내보냈어요: ${r.name}`);
+    });
+  } catch (err) {
+    setNotice(`내보내지 못했어요: ${err?.message ?? err}`);
+  } finally {
+    exporting = false;
+  }
+});
+
 // --- 시작 ---
 
 p.onSurface(PREVIEW_SURFACE, (surface) => preview.attach(surface));
@@ -430,7 +495,7 @@ function updateLoading() {
 const onReadFail = () => { if (!retrying) { retrying = true; updateLoading(); } };
 
 async function start() {
-  p.publish({ export_info: '', board_options: [], board: null, board_label: '' });
+  p.publish({ export_info: '', has_export_info: false, board_options: [], board: null, board_label: '' });
   publishPanel(null);
   publishNotice();
   publishMode();

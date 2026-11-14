@@ -1,6 +1,6 @@
 # 새 판 올리기
 
-1. `npm test && npm run build`
+1. `npm test && npm run build` — build는 2단계다. `build:viewer`가 내보내기 뷰어(`src/viewer/viewer.js`, layout.js·color.js 포함)를 iife로 묶어 `dist/viewer.txt`를 만들고, 이어서 `src/main.js`를 묶을 때 esbuild text loader(`--loader:.txt=text`)로 그 파일을 문자열로 넣는다(`src/main.js`의 `import VIEWER_JS from '../dist/viewer.txt'`).
 2. `node scripts/pack.mjs` — `dist/moodboard.upload.js`(gzip 로더)와 sha256, `dist/moodboard.upload.b64`를 낸다.
 3. `node scripts/gen-app.mjs <자산 판>` — 지난 자산 판보다 1 큰 수를 준다(`app/moodboard.json`).
 4. MCP `upload_asset`: id `moodboard`, version `<자산 판>`, format `javascript`, sha256은 2의 값, data_base64는 `.b64` 내용.

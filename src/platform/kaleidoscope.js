@@ -1,6 +1,12 @@
 // window.kaleidoscope 위의 얇은 어댑터. 다른 모듈은 이 객체만 쓴다(테스트에서는 가짜로 바꾼다).
 // 정본: kaleidoscope ui/src/blocks/sandbox-frame.ts.
 
+function exactBuffer(bytes) {
+  if (bytes instanceof ArrayBuffer) return bytes;
+  const whole = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength;
+  return whole ? bytes.buffer : bytes.slice().buffer;
+}
+
 export function createPlatform(client) {
   return {
     // store.js의 adapter 모양 {get, set}. set의 실패는 플랫폼 에러 객체({id, code, message})다.
@@ -26,6 +32,12 @@ export function createPlatform(client) {
     },
     files: {
       read: (id) => client.files.read(id),
+      // client 2. 선언한 client 동작 안에서만 열린다. file_id 또는 취소면 null.
+      savePrompt: ({ suggested_name, mime }) => client.files.save_prompt({ suggested_name, mime }),
+      // 프레임은 bytes를 ArrayBuffer로 넘기므로(transfer) 딱 맞는 ArrayBuffer를 만든다.
+      write: (id, offset, bytes) => client.files.write(id, offset, exactBuffer(bytes)),
+      close: (id) => client.files.close(id),
+      abort: (id) => client.files.abort(id),
     },
     http: {
       read: (permission, path, query = {}) => client.http.read({ permission, path, query }),

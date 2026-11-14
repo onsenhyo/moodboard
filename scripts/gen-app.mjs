@@ -98,6 +98,7 @@ const outputs = {
   board_options: [],
   notice: null,
   export_info: '',
+  has_export_info: false, // Task 8: warn일 때 export_info(약 N MB)를 보인다
   board: null,
   board_label: '',
   mode: 'manual',
@@ -167,8 +168,8 @@ const toolbar = {
     { type: 'button', label: '−', description: '축소', on_click: c('zoom_out') },
     { type: 'button', label: '+', description: '확대', on_click: c('zoom_in') },
     { type: 'button', label: '맞춤', on_click: c('zoom_fit') },
-    // [내보내기]는 Task 8이 export 핸들러를 넣을 때 더한다. 지금 누르면 "클라이언트 동작이 등록되지 않았습니다"가 난다.
-    // { type: 'button', label: '내보내기', on_click: c('export') },
+    // 단일 HTML 내보내기(src/export.js). 저장 창은 client가 save_prompt로 연다.
+    { type: 'button', label: '내보내기', on_click: c('export') },
   ],
 };
 
@@ -231,6 +232,7 @@ const ui = {
   children: [
     toolbar,
     when('has_notice', { type: 'notice', message: c('notice') }),
+    when('has_export_info', { type: 'text', style: 'meta', value: c('export_info') }),
     {
       type: 'split', direction: 'row', sizes: [0.72, 0.28],
       children: [

@@ -65,7 +65,7 @@
   "assets": [
     {
       "id": "moodboard",
-      "version": 3
+      "version": 4
     }
   ],
   "storage": {
@@ -1999,7 +1999,7 @@
     "runtime": "javascript",
     "entry": {
       "id": "moodboard",
-      "version": 3
+      "version": 4
     },
     "outputs": {
       "selected": {
@@ -2016,6 +2016,9 @@
       },
       "export_info": {
         "default": ""
+      },
+      "has_export_info": {
+        "default": false
       },
       "board": {
         "default": null
@@ -2407,6 +2410,13 @@
             "on_click": {
               "client": "zoom_fit"
             }
+          },
+          {
+            "type": "button",
+            "label": "내보내기",
+            "on_click": {
+              "client": "export"
+            }
           }
         ]
       },
@@ -2419,6 +2429,19 @@
           "type": "notice",
           "message": {
             "client": "notice"
+          }
+        }
+      },
+      {
+        "type": "when",
+        "value": {
+          "client": "has_export_info"
+        },
+        "child": {
+          "type": "text",
+          "style": "meta",
+          "value": {
+            "client": "export_info"
           }
         }
       },
