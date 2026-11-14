@@ -142,49 +142,55 @@ export function packThumbs(existing, add, { shardLimit = 1_000_000, shards = 128
 
 const SHARD_WRITE_TRIES = 3;
 
+// 저장되는 shard 값은 "<writtenAtMs>:<base64>"다. base64에는 ':'가 없으므로 접두가 없는 값은
+// writtenAt 0인 base64로 읽는다.
+const STAMP_RE = /^(\d+):/;
+export function parseThumb(v) {
+  if (typeof v !== 'string') return { t: 0, b64: null };
+  const m = STAMP_RE.exec(v);
+  return m ? { t: Number(m[1]), b64: v.slice(m[0].length) } : { t: 0, b64: v };
+}
+export const stampThumb = (t, b64) => `${t}:${b64}`;
+
 // ThumbStore.
 // - 모든 shard 쓰기는 읽고-고치고-쓰기다. adapter.get으로 그 shard를 새로 읽고, 추가나 삭제 하나만
-//   적용하고, 크기를 shardLimit로 다시 잰 뒤 adapter.set 한다. 메모리 캐시로 덮어쓰지 않으므로
-//   onStorageChange 등으로 플랫폼의 기준 판이 앞서가도 다른 PC의 썸네일을 지우지 않는다.
+//   적용하고, 크기(접두 포함 저장 값의 JSON.stringify 바이트)를 shardLimit로 다시 잰 뒤 adapter.set 한다.
+//   메모리 캐시로 덮어쓰지 않으므로 onStorageChange 등으로 기준 판이 앞서가도 다른 PC의 썸네일을 지우지 않는다.
 // - 캐시와 색인은 실제로 쓴 값(또는 읽은 값)으로만 갱신한다.
-// - reload(shardId, value)는 다른 PC의 변경을 받아 그 shard의 캐시와 색인만 다시 만든다.
-// - 색인은 카드가 실제로 들어 있는 shard를 가리킨다. 이 창이 카드를 다른 shard로 옮긴 뒤
-//   옛 shard에 남은 사본은 pending에 적어 두고, 그 shard를 다음에 성공적으로 쓸 때 걷어낸다.
-export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_000_000 } = {}) {
+// - 한 카드가 여러 shard에 있으면 writtenAt이 가장 큰 사본이 이기고, 같으면 낮은 번호 shard가 이긴다.
+//   세션 기억 없이 저장된 값만으로 정해지므로 재시작한 창이나 다른 PC도 같은 사본을 고른다.
+// - 진 사본은 그 shard를 다음에 성공적으로 쓸 때 걷어낸다. put과 remove는 그 카드의 모든 사본을 정리한다.
+// - reload(shardId, value)는 다른 PC의 변경을 받아 그 shard의 캐시와, 그 shard에 걸린 카드의 색인만 다시 만든다.
+export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_000_000, now = Date.now } = {}) {
   const ids = Array.from({ length: shards }, (_, i) => shardIdOf(i));
-  const cache = new Map(); // shardId -> Map<cardId, b64>
-  const index = new Map(); // cardId -> shardId
-  const pending = new Map(); // shardId -> Set<cardId>: 이 창이 옮겨서 옛 shard에 남은 사본
+  const cache = new Map(); // shardId -> Map<cardId, 저장 값>
+  const index = new Map(); // cardId -> 이기는 사본의 shardId
 
-  const holds = (id, cardId) => !!id && cache.get(id)?.has(cardId) === true;
-  const toMap = (value) => new Map(value && typeof value === 'object' ? Object.entries(value) : []);
+  const toMap = (value) => new Map(
+    value && typeof value === 'object' ? Object.entries(value).filter(([, v]) => typeof v === 'string') : [],
+  );
+  const stampIn = (id, cardId) => parseThumb(cache.get(id)?.get(cardId)).t;
+  const holders = (cardId) => ids.filter((id) => cache.get(id)?.has(cardId));
 
-  // 다른 shard에도 있는 카드면 그 shard를 찾는다.
-  function findElsewhere(cardId, exceptId) {
-    for (const id of ids) if (id !== exceptId && holds(id, cardId)) return id;
-    return undefined;
+  // 사본 (ta, 번호 ia)가 (tb, ib)를 이기는가.
+  const beats = (ta, ia, tb, ib) => ta > tb || (ta === tb && ia < ib);
+
+  function best(cardId) {
+    let win;
+    for (let i = 0; i < ids.length; i++) {
+      if (!cache.get(ids[i])?.has(cardId)) continue;
+      if (win === undefined || beats(stampIn(ids[i], cardId), i, stampIn(ids[win], cardId), win)) win = i;
+    }
+    return win === undefined ? undefined : ids[win];
   }
 
-  // shard 하나의 캐시를 바꾸고 그 shard에 걸린 색인만 다시 만든다.
   function load(id, value) {
     const m = toMap(value);
-    const old = cache.get(id);
+    const keys = new Set([...(cache.get(id)?.keys() ?? []), ...m.keys()]);
     cache.set(id, m);
-    if (old) {
-      for (const k of old.keys()) {
-        if (index.get(k) !== id || m.has(k)) continue;
-        const other = findElsewhere(k, id);
-        if (other) index.set(k, other); else index.delete(k);
-      }
-    }
-    for (const k of m.keys()) {
-      const cur = index.get(k);
-      if (!(cur && cur !== id && holds(cur, k))) index.set(k, id);
-    }
-    const p = pending.get(id);
-    if (p) {
-      for (const k of p) if (!m.has(k)) p.delete(k);
-      if (p.size === 0) pending.delete(id);
+    for (const k of keys) {
+      const b = best(k);
+      if (b) index.set(k, b); else index.delete(k);
     }
   }
 
@@ -204,11 +210,14 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
   async function writeOnce(id, apply) {
     const raw = await adapter.get(id);
     const fresh = toMap(raw);
+    const idx = ids.indexOf(id);
     let changed = false;
-    // 이 창이 옮긴 카드의 옛 사본을 걷어낸다(색인이 실제로 다른 shard를 가리킬 때만).
-    for (const k of pending.get(id) ?? []) {
-      const home = index.get(k);
-      if (fresh.has(k) && home && home !== id && holds(home, k)) { fresh.delete(k); changed = true; }
+    // 다른 shard의 사본에 지는 사본을 걷어낸다. 새로 읽은 값의 시각으로 비교하므로
+    // 다른 PC가 이 shard에 더 새로 쓴 사본은 지우지 않는다.
+    for (const [k, v] of [...fresh]) {
+      const w = index.get(k);
+      if (!w || w === id || !cache.get(w)?.has(k)) continue;
+      if (beats(stampIn(w, k), ids.indexOf(w), parseThumb(v).t, idx)) { fresh.delete(k); changed = true; }
     }
     if (apply(fresh)) changed = true;
     if (!changed) { load(id, raw); return 'unchanged'; }
@@ -221,12 +230,10 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
       load(id, raw);
       return { conflict: err };
     }
-    pending.delete(id);
     load(id, obj);
     return 'ok';
   }
 
-  // nofit이 나지 않는 쓰기(삭제, 정리)를 충돌 시 3번까지.
   async function writeWithRetry(id, apply) {
     let lastErr;
     for (let i = 0; i < SHARD_WRITE_TRIES; i++) {
@@ -237,32 +244,30 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
     throw lastErr;
   }
 
+  // 이기는 사본만 남기고 나머지 shard의 사본을 걷어낸다. 실패는 다음 쓰기에서 다시 걷힌다.
+  async function sweep(cardId) {
+    for (const id of holders(cardId)) {
+      if (id === index.get(cardId)) continue;
+      try { await writeWithRetry(id, () => false); } catch { /* 다음 쓰기에서 정리 */ }
+    }
+  }
+
   async function put(cardId, b64) {
     let conflicts = 0;
     // nofit은 그 shard의 캐시를 새로 읽은 값으로 바꾸므로 packThumbs가 다음 shard를 고른다.
     for (let guard = 0; guard < shards + SHARD_WRITE_TRIES; guard++) {
-      const r = packThumbs(cache, { cardId, b64 }, { shards, shardLimit });
+      // 새 사본이 반드시 이기도록 아는 사본들보다 큰 시각을 쓴다.
+      const known = holders(cardId).reduce((t, id) => Math.max(t, stampIn(id, cardId)), -1);
+      const value = stampThumb(Math.max(now(), known + 1), b64);
+      const r = packThumbs(cache, { cardId, b64: value }, { shards, shardLimit });
       if (r.error) return r;
-      const prev = index.get(cardId);
-      const res = await writeOnce(r.shardId, (m) => {
-        if (m.get(cardId) === b64) return false;
-        m.set(cardId, b64);
-        return true;
-      });
+      const res = await writeOnce(r.shardId, (m) => { m.set(cardId, value); return true; });
       if (res.conflict) {
         if (++conflicts >= SHARD_WRITE_TRIES) throw res.conflict;
         continue;
       }
       if (res === 'nofit') continue;
-      // 'ok' 또는 'unchanged': 이제 카드는 r.shardId에 있다.
-      index.set(cardId, r.shardId);
-      if (prev && prev !== r.shardId && holds(prev, cardId)) {
-        if (!pending.has(prev)) pending.set(prev, new Set());
-        pending.get(prev).add(cardId);
-        // 옛 사본 정리는 실패해도 넣기는 이미 끝났다. 남은 사본은 pending이 다음 쓰기에서 걷어낸다.
-        try { await writeWithRetry(prev, () => false); } catch { /* 다음 쓰기에서 정리 */ }
-        index.set(cardId, r.shardId);
-      }
+      await sweep(cardId);
       return;
     }
     return { error: 'full' };
@@ -274,14 +279,14 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
       const id = index.get(cardId);
       if (!id) return;
       await writeWithRetry(id, (m) => m.delete(cardId));
-      if (index.get(cardId) === id) index.delete(cardId); // 다시 읽은 shard에 이미 없던 경우
+      if (index.get(cardId) === id) index.delete(cardId); // 안전장치
     }
   }
 
   return {
     async get(cardId) {
       const id = index.get(cardId);
-      return (id && cache.get(id)?.get(cardId)) ?? null;
+      return (id && parseThumb(cache.get(id)?.get(cardId)).b64) ?? null;
     },
     put: (cardId, b64) => serial(() => put(cardId, b64)),
     remove: (cardId) => serial(() => remove(cardId)),

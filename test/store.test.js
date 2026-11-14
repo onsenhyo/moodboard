@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mergeBoards, saveWithRetry, pruneTombstones, packThumbs, createThumbStore, isConflict,
+  mergeBoards, saveWithRetry, pruneTombstones, packThumbs, createThumbStore, isConflict, parseThumb,
 } from '../src/store.js';
 
 const CONFLICT = { code: 'conflict', id: 'STORAGE_ITEM_WRITE_CONFLICT' };
@@ -27,6 +27,9 @@ function fakeAdapter(initial = {}, { conflicts = 0, onConflict, only } = {}) {
   };
   return a;
 }
+
+// 저장 값의 "<시각>:" 접두를 뗀 shard 내용.
+const plain = (o) => Object.fromEntries(Object.entries(o ?? {}).map(([k, v]) => [k, parseThumb(v).b64]));
 
 const cardsOf = (d, boardId) => d.boards.find((b) => b.id === boardId).cards;
 const cardIds = (d, boardId) => cardsOf(d, boardId).map((c) => c.id).sort();
@@ -295,7 +298,7 @@ test('ThumbStore: remove는 그 shard에서 카드를 지운다', async () => {
   const a = fakeAdapter({ thumbs_000: { a: 'AAA', b: 'BBB' } });
   const s = await createThumbStore(a, { shards: 2 });
   await s.remove('a');
-  assert.deepEqual(a.data.get('thumbs_000'), { b: 'BBB' });
+  assert.deepEqual(plain(a.data.get('thumbs_000')), { b: 'BBB' });
   assert.equal(await s.get('a'), null);
   await s.remove('nope'); // 없는 카드는 조용히 넘어간다
   assert.equal(a.sets.length, 1);
@@ -308,7 +311,7 @@ test('ThumbStore: put 충돌 시 그 shard를 다시 읽고 다른 PC의 썸네�
   });
   const s = await createThumbStore(a, { shards: 2 });
   await s.put('mine', 'MMM');
-  assert.deepEqual(a.data.get('thumbs_000'), { a: 'AAA', other: 'OOO', mine: 'MMM' });
+  assert.deepEqual(plain(a.data.get('thumbs_000')), { a: 'AAA', other: 'OOO', mine: 'MMM' });
   assert.equal(await s.get('other'), 'OOO');
 });
 
@@ -331,7 +334,7 @@ test('ThumbStore: remove 충돌 시 다시 읽고 그 카드만 지운다', asyn
   });
   const s = await createThumbStore(a, { shards: 1 });
   await s.remove('a');
-  assert.deepEqual(a.data.get('thumbs_000'), { b: 'BBB', c: 'CCC' });
+  assert.deepEqual(plain(a.data.get('thumbs_000')), { b: 'BBB', c: 'CCC' });
 });
 
 test('ThumbStore: 충돌이 3번 이어지면 에러를 던지고, 다른 에러는 바로 던진다', async () => {
@@ -355,7 +358,7 @@ test('ThumbStore: 다른 shard에 있던 카드를 바꿔 넣으면 옛 shard에
   const s = await createThumbStore(a, { shards: 2, shardLimit: 1000 });
   await s.put('a', 'z'.repeat(200));
   assert.deepEqual(Object.keys(a.data.get('thumbs_000')), ['big']);
-  assert.deepEqual(a.data.get('thumbs_001'), { a: 'z'.repeat(200) });
+  assert.deepEqual(plain(a.data.get('thumbs_001')), { a: 'z'.repeat(200) });
   assert.equal(await s.get('a'), 'z'.repeat(200));
 });
 
@@ -402,7 +405,7 @@ test('ThumbStore: 캐시가 낡았을 때 put은 다른 PC가 그 사이 넣은 
   // 이 창 모르게 다른 PC가 쓴다(충돌 없이 기준 판이 앞서간 경우).
   a.data.set('thumbs_000', { a: 'AAA', other: 'OOO' });
   await s.put('mine', 'MMM');
-  assert.deepEqual(a.data.get('thumbs_000'), { a: 'AAA', other: 'OOO', mine: 'MMM' });
+  assert.deepEqual(plain(a.data.get('thumbs_000')), { a: 'AAA', other: 'OOO', mine: 'MMM' });
   assert.equal(await s.get('other'), 'OOO');
 });
 
@@ -411,7 +414,7 @@ test('ThumbStore: 캐시가 낡았을 때 remove도 다른 PC의 썸네일을 �
   const s = await createThumbStore(a, { shards: 1 });
   a.data.set('thumbs_000', { a: 'AAA', other: 'OOO' });
   await s.remove('a');
-  assert.deepEqual(a.data.get('thumbs_000'), { other: 'OOO' });
+  assert.deepEqual(plain(a.data.get('thumbs_000')), { other: 'OOO' });
 });
 
 test('ThumbStore: 새로 읽은 shard가 차 있으면 한도를 넘기지 않고 다음 shard에 쓴다(캐시가 낡은 경우)', async () => {
@@ -444,4 +447,104 @@ test('saveWithRetry: tries가 0이어도 한 번은 시도한다', async () => {
   const a = fakeAdapter({ boards: doc() });
   await saveWithRetry(a, (d) => d, { tries: 0, now: () => 0 });
   assert.equal(a.sets.length, 1);
+});
+
+// --- fix round 2: 기록 시각으로 중복 해소 ---
+
+test('ThumbStore: 저장 값은 "<시각>:<base64>"이고 get은 base64만 돌려준다', async () => {
+  const a = fakeAdapter();
+  const s = await createThumbStore(a, { shards: 1, now: () => 1234 });
+  await s.put('k', 'QUJD');
+  assert.deepEqual(a.data.get('thumbs_000'), { k: '1234:QUJD' });
+  assert.equal(await s.get('k'), 'QUJD');
+  assert.deepEqual(parseThumb('QUJD'), { t: 0, b64: 'QUJD' }, '접두가 없으면 시각 0');
+});
+
+test('ThumbStore: 크기는 접두를 포함한 저장 값으로 잰다', async () => {
+  // {"k":"7:xxx"} = 8 + 2 + n
+  const a = fakeAdapter();
+  const s = await createThumbStore(a, { shards: 1, shardLimit: 100, now: () => 7 });
+  assert.deepEqual(await s.put('k', 'x'.repeat(91)), { error: 'full' });
+  assert.equal(await s.put('k', 'x'.repeat(90)), undefined);
+  assert.equal(Buffer.byteLength(JSON.stringify(a.data.get('thumbs_000'))), 100);
+});
+
+test('ThumbStore: 새 창에서 높은 shard의 사본이 더 새로우면 그 사본을 읽는다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: '100:OLD' }, thumbs_001: { a: '200:NEW' } });
+  const s = await createThumbStore(a, { shards: 2 });
+  assert.equal(await s.get('a'), 'NEW');
+});
+
+test('ThumbStore: 새 창에서 낮은 shard의 사본이 더 새로우면 그 사본을 읽는다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: '200:NEW' }, thumbs_001: { a: '100:OLD' } });
+  const s = await createThumbStore(a, { shards: 2 });
+  assert.equal(await s.get('a'), 'NEW');
+});
+
+test('ThumbStore: 시각이 같으면 낮은 shard, 접두 없는 값은 시각 0으로 진다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: '100:LOW', b: 'PLAIN' }, thumbs_001: { a: '100:HIGH', b: '1:STAMPED' } });
+  const s = await createThumbStore(a, { shards: 2 });
+  assert.equal(await s.get('a'), 'LOW');
+  assert.equal(await s.get('b'), 'STAMPED');
+});
+
+test('ThumbStore: reload로 낡은 사본이 들어와도 새 사본을 읽고, 더 새 사본이 오면 그것을 읽는다', async () => {
+  const a = fakeAdapter({ thumbs_001: { a: '200:NEW' } });
+  const s = await createThumbStore(a, { shards: 2 });
+  s.reload('thumbs_000', { a: '100:OLD', b: '1:B' });
+  assert.equal(await s.get('a'), 'NEW');
+  assert.equal(await s.get('b'), 'B');
+  s.reload('thumbs_000', { a: '300:NEWER' });
+  assert.equal(await s.get('a'), 'NEWER');
+  assert.equal(await s.get('b'), null);
+  s.reload('thumbs_000', {});
+  assert.equal(await s.get('a'), 'NEW');
+});
+
+test('ThumbStore: 진 사본은 그 shard의 다음 쓰기에서 걷히고, 다른 PC가 더 새로 쓴 사본은 남는다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: '100:OLD' }, thumbs_001: { a: '200:NEW' } });
+  const s = await createThumbStore(a, { shards: 2, now: () => 1000 });
+  await s.put('x', 'X');
+  assert.deepEqual(plain(a.data.get('thumbs_000')), { x: 'X' });
+  assert.deepEqual(plain(a.data.get('thumbs_001')), { a: 'NEW' });
+
+  // 캐시로는 001이 이기지만, 다른 PC가 000에 더 새로 쓴 사본은 지우지 않는다.
+  const b = fakeAdapter({ thumbs_000: { a: '100:OLD' }, thumbs_001: { a: '200:NEW' } });
+  const s2 = await createThumbStore(b, { shards: 2, now: () => 1000 });
+  b.data.set('thumbs_000', { a: '900:FROM_OTHER_PC' });
+  await s2.put('x', 'X');
+  assert.deepEqual(plain(b.data.get('thumbs_000')), { a: 'FROM_OTHER_PC', x: 'X' });
+  assert.equal(await s2.get('a'), 'FROM_OTHER_PC');
+});
+
+test('ThumbStore: put은 시계가 뒤로 가도 새 사본이 이기게 쓰고 다른 사본을 모두 걷는다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: '5000:OLD', big: 'y'.repeat(900) }, thumbs_002: { a: '4000:OLDER' } });
+  const s = await createThumbStore(a, { shards: 3, shardLimit: 1000, now: () => 10 });
+  await s.put('a', 'z'.repeat(250));
+  assert.equal(await s.get('a'), 'z'.repeat(250));
+  assert.deepEqual(keysOf(a, 'thumbs_000'), ['big']);
+  // packThumbs는 카드가 이미 있고 자리가 맞는 shard(002)를 먼저 고른다.
+  assert.deepEqual(keysOf(a, 'thumbs_001'), []);
+  assert.deepEqual(keysOf(a, 'thumbs_002'), ['a']);
+  assert.ok(parseThumb(a.data.get('thumbs_002').a).t > 5000, '아는 사본보다 큰 시각');
+  const fresh = await createThumbStore(a, { shards: 3, shardLimit: 1000 });
+  assert.equal(await fresh.get('a'), 'z'.repeat(250));
+});
+
+test('ThumbStore: 옮긴 뒤 정리가 실패한 채 창을 닫아도 새 창과 다른 PC는 새 이미지를 읽고, 다음 쓰기에서 사본이 걷힌다', async () => {
+  // 리뷰 재현: 000→001 이동, 000 정리가 충돌 3번으로 실패.
+  const a = fakeAdapter({ thumbs_000: { a: 'x', big: 'y'.repeat(900) } }, { conflicts: 3, only: 'thumbs_000' });
+  const s = await createThumbStore(a, { shards: 2, shardLimit: 1000, now: () => 1000 });
+  const z = 'z'.repeat(250);
+  await s.put('a', z);
+  assert.equal(await s.get('a'), z);
+  assert.deepEqual(keysOf(a, 'thumbs_000'), ['a', 'big'], '옛 사본이 남음');
+
+  const s2 = await createThumbStore(a, { shards: 2, shardLimit: 1000, now: () => 2000 });
+  assert.equal(await s2.get('a'), z, '새 세션도 새 이미지');
+  await s2.put('big2', 'q');
+  assert.deepEqual(keysOf(a, 'thumbs_000'), ['big', 'big2'], '다음 쓰기에서 옛 사본이 걷힘');
+
+  const s3 = await createThumbStore(a, { shards: 2, shardLimit: 1000 });
+  assert.equal(await s3.get('a'), z);
 });
