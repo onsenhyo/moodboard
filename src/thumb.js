@@ -5,7 +5,8 @@
 //   때까지 품질 0.5, 다음에 긴 변 480px로 낮춘다.
 // - pixels: 64×64로 줄인 RGBA(Uint8ClampedArray). 대표 색 계산용.
 // - width, height: 만든 썸네일의 크기(카드 비율용).
-// 열 수 없거나 그릴 수 없으면 null.
+// 열 수 없거나 그릴 수 없으면 null. 영상의 64×64 표본이 모두 거의 검정(모든 채널 < 8)이거나
+// 480px·품질 0.5에서도 base64가 100,000자를 넘으면 null(자리표시 카드).
 
 const B64_MAX = 100_000;
 const STEPS = [
@@ -80,15 +81,18 @@ function fromVideo(blob) {
     video.currentTime = t;
     await seeked;
     await nextFrame();
-    return render(video, w, h);
+    return render(video, w, h, { rejectBlack: true });
   })();
 
   const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), VIDEO_TIMEOUT_MS); });
   return Promise.race([work, timeout]).finally(cleanup);
 }
 
-async function render(source, srcW, srcH) {
+async function render(source, srcW, srcH, { rejectBlack = false } = {}) {
   if (!(srcW > 0 && srcH > 0)) return null;
+  const pixels = samplePixels(source);
+  // 디코드하지 못한 영상(hvc1 등)은 검은 장면을 낸다. 그런 장면은 자리표시 카드로 보낸다.
+  if (rejectBlack && isNearBlack(pixels)) return null;
   let last = null;
   for (const { side, quality } of STEPS) {
     const scale = Math.min(1, side / Math.max(srcW, srcH));
@@ -102,7 +106,17 @@ async function render(source, srcW, srcH) {
     last = { jpegB64, width: w, height: h };
     if (jpegB64.length <= B64_MAX) break;
   }
-  return { ...last, pixels: samplePixels(source) };
+  // 480px·품질 0.5에서도 크면 저장하지 않는다.
+  if (!last || last.jpegB64.length > B64_MAX) return null;
+  return { ...last, pixels };
+}
+
+const BLACK_MAX = 8;
+function isNearBlack(px) {
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i] >= BLACK_MAX || px[i + 1] >= BLACK_MAX || px[i + 2] >= BLACK_MAX) return false;
+  }
+  return true;
 }
 
 function samplePixels(source) {
