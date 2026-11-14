@@ -35,5 +35,7 @@ export function createPlatform(client) {
     setState: (key, value) => client.setState(key, value),
     handle: (name, fn) => client.handle(name, fn),
     onSurface: (name, fn) => client.surfaces.on(name, fn),
+    // 리스너가 phase 'closing'에서 돌려준 promise는 쉘이 창을 닫기 전에 기다린다.
+    onLifecycle: (fn) => client.onLifecycle(fn),
   };
 }

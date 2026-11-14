@@ -127,8 +127,9 @@ function shardBytes(map, replaceKey, replaceVal) {
 }
 
 // 넣을 수 있는 가장 낮은 번호의 shard. 이미 들어 있는 카드면 그 shard에 맞는지 먼저 본다.
-export function packThumbs(existing, add, { shardLimit = 1_000_000, shards = 128 } = {}) {
-  const fits = (id) => shardBytes(existing.get(id), add.cardId, add.b64) <= shardLimit;
+// skip에 든 shard(아직 못 읽은 shard)는 고르지 않는다.
+export function packThumbs(existing, add, { shardLimit = 1_000_000, shards = 128, skip } = {}) {
+  const fits = (id) => !skip?.has(id) && shardBytes(existing.get(id), add.cardId, add.b64) <= shardLimit;
   for (let i = 0; i < shards; i++) {
     const id = shardIdOf(i);
     if (existing.get(id)?.has(add.cardId) && fits(id)) return { shardId: id };
@@ -161,10 +162,13 @@ export const stampThumb = (t, b64) => `${t}:${b64}`;
 //   세션 기억 없이 저장된 값만으로 정해지므로 재시작한 창이나 다른 PC도 같은 사본을 고른다.
 // - 진 사본은 그 shard를 다음에 성공적으로 쓸 때 걷어낸다. put과 remove는 그 카드의 모든 사본을 정리한다.
 // - reload(shardId, value)는 다른 PC의 변경을 받아 그 shard의 캐시와, 그 shard에 걸린 카드의 색인만 다시 만든다.
+// - 시작할 때 읽지 못한 shard는 missing()에 남는다. 그 shard는 reload로 값을 받을 때까지 새 썸네일을 받지 않는다.
+//   읽은 shard가 모두 찼는데 못 읽은 shard가 남아 있으면 put은 {error:'full'} 대신 'thumbs loading' 오류를 던진다.
 export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_000_000, now = Date.now } = {}) {
   const ids = Array.from({ length: shards }, (_, i) => shardIdOf(i));
   const cache = new Map(); // shardId -> Map<cardId, 저장 값>
   const index = new Map(); // cardId -> 이기는 사본의 shardId
+  const unloaded = new Set(); // 아직 읽지 못한 shardId
 
   const toMap = (value) => new Map(
     value && typeof value === 'object' ? Object.entries(value).filter(([, v]) => typeof v === 'string') : [],
@@ -185,6 +189,7 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
   }
 
   function load(id, value) {
+    unloaded.delete(id); // 값을 받았으니 읽은 shard다
     const m = toMap(value);
     const keys = new Set([...(cache.get(id)?.keys() ?? []), ...m.keys()]);
     cache.set(id, m);
@@ -194,8 +199,11 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
     }
   }
 
-  const values = await Promise.all(ids.map((id) => adapter.get(id)));
-  ids.forEach((id, i) => load(id, values[i]));
+  const settled = await Promise.allSettled(ids.map((id) => adapter.get(id)));
+  ids.forEach((id, i) => {
+    if (settled[i].status === 'fulfilled') load(id, settled[i].value);
+    else unloaded.add(id);
+  });
 
   // 같은 창 안의 put/remove가 겹치지 않게 한 줄로 세운다.
   let tail = Promise.resolve();
@@ -259,8 +267,11 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
       // 새 사본이 반드시 이기도록 아는 사본들보다 큰 시각을 쓴다.
       const known = holders(cardId).reduce((t, id) => Math.max(t, stampIn(id, cardId)), -1);
       const value = stampThumb(Math.max(now(), known + 1), b64);
-      const r = packThumbs(cache, { cardId, b64: value }, { shards, shardLimit });
-      if (r.error) return r;
+      const r = packThumbs(cache, { cardId, b64: value }, { shards, shardLimit, skip: unloaded });
+      if (r.error) {
+        if (unloaded.size) throw new Error('thumbs loading');
+        return r;
+      }
       const res = await writeOnce(r.shardId, (m) => { m.set(cardId, value); return true; });
       if (res.conflict) {
         if (++conflicts >= SHARD_WRITE_TRIES) throw res.conflict;
@@ -293,5 +304,6 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
     reload(shardId, value) {
       if (ids.includes(shardId)) load(shardId, value);
     },
+    missing: () => [...unloaded],
   };
 }

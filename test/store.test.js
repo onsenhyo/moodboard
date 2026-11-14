@@ -548,3 +548,33 @@ test('ThumbStore: 옮긴 뒤 정리가 실패한 채 창을 닫아도 새 창과
   const s3 = await createThumbStore(a, { shards: 2, shardLimit: 1000 });
   assert.equal(await s3.get('a'), z);
 });
+
+test('ThumbStore: 시작 때 못 읽은 shard는 missing에 남고 쓰기를 받지 않다가 reload 뒤에 읽힌다', async () => {
+  const a = fakeAdapter({ thumbs_001: { z: 'ZZZ' } });
+  const get = a.get;
+  let fail = true;
+  a.get = async (entry) => { if (fail && entry === 'thumbs_000') throw new Error('net'); return get(entry); };
+  const s = await createThumbStore(a, { shards: 2 });
+  assert.deepEqual(s.missing(), ['thumbs_000']);
+  assert.equal(await s.get('z'), 'ZZZ');
+  assert.equal(await s.put('c1', 'C'), undefined);
+  assert.deepEqual(a.sets.map(([e]) => e), ['thumbs_001']);
+  fail = false;
+  s.reload('thumbs_000', { q: 'QQQ' });
+  assert.deepEqual(s.missing(), []);
+  assert.equal(await s.get('q'), 'QQQ');
+});
+
+test('ThumbStore: 읽은 shard가 모두 차고 못 읽은 shard가 남으면 put은 full 대신 실패한다', async () => {
+  const a = fakeAdapter();
+  a.get = async () => { throw new Error('net'); };
+  const s = await createThumbStore(a, { shards: 1 });
+  assert.deepEqual(s.missing(), ['thumbs_000']);
+  await assert.rejects(s.put('c1', 'C'), /loading/);
+  assert.equal(a.sets.length, 0);
+});
+
+test('packThumbs: skip에 든 shard는 고르지 않는다', () => {
+  assert.deepEqual(packThumbs(new Map(), { cardId: 'k', b64: 'x' }, { shards: 2, skip: new Set(['thumbs_000']) }), { shardId: 'thumbs_001' });
+  assert.deepEqual(packThumbs(new Map(), { cardId: 'k', b64: 'x' }, { shards: 1, skip: new Set(['thumbs_000']) }), { error: 'full' });
+});

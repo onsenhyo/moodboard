@@ -8,6 +8,7 @@ import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
 import { reduce, initialState, placeNear, zoomAt, fitView, sortCols } from './interaction.js';
 import { createRenderer } from './render.js';
+import { createGate, retryRead, createSaver } from './startup.js';
 
 const SURFACE = 'board';
 const SHARDS = 128;
@@ -18,6 +19,8 @@ const SORT_GAP = 16;
 const FULL_NOTICE = '썸네일 저장 공간이 가득 찼어요 (약 1,200장)';
 const NO_ORIG_NOTICE = '원본은 다른 PC에 있어요';
 const DEFAULT_BOARD = '내 보드';
+const LOADING_NOTICE = '보드를 불러오는 중이에요';
+const RETRYING_NOTICE = '보드를 다 불러오지 못해 다시 읽는 중이에요';
 const HEX = /^#[0-9a-f]{6}$/i;
 
 const p = createPlatform(window.kaleidoscope);
@@ -28,6 +31,9 @@ let ui = initialState();
 let selectedId = null;
 let notice = null;
 let thumbs = null;
+let loaded = false; // boards를 한 번이라도 읽었는가
+let loadingNotice = LOADING_NOTICE; // 시작 읽기가 다 끝날 때까지 notice 아래에 깔린다
+const ready = createGate(); // boards와 썸네일 저장소가 준비되면 열린다
 
 // --- 보드와 카드 ---
 
@@ -38,7 +44,8 @@ const cardById = (id) => (id ? liveCards().find((c) => c.id === id) ?? null : nu
 
 function ensureBoard() {
   if (!board()) boardId = liveBoards()[0]?.id ?? null;
-  if (!boardId) {
+  // 저장된 보드를 읽기 전에는 기본 보드를 만들지 않는다.
+  if (!boardId && loaded) {
     const b = newBoard(DEFAULT_BOARD);
     doc.boards.push(b);
     boardId = b.id;
@@ -55,37 +62,26 @@ function touchCard(id, patch) {
 
 // --- 저장 ---
 
-let saveTimer = null;
-let saving = false;
-let again = false;
+// 저장은 한 줄로 세운다. 창을 닫을 때 saver.flush()가 남은 저장을 끝낸다.
+const saver = createSaver(async () => {
+  const next = await saveWithRetry(p.storage, (d) => d, { local: doc });
+  // 저장하는 동안 바뀐 로컬 내용이 이기도록 로컬을 앞에 둔다.
+  doc = mergeBoards(doc, next);
+  refresh(false);
+}, { onError: (err) => setNotice(err?.message ?? '저장하지 못했어요') });
 
-function scheduleSave(ms = 0) {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(runSave, ms);
-}
-
-async function runSave() {
-  saveTimer = null;
-  if (saving) { again = true; return; }
-  saving = true;
-  try {
-    const next = await saveWithRetry(p.storage, (d) => d, { local: doc });
-    // 저장하는 동안 바뀐 로컬 내용이 이기도록 로컬을 앞에 둔다.
-    doc = mergeBoards(doc, next);
-    refresh(false);
-  } catch (err) {
-    setNotice(err?.message ?? '저장하지 못했어요');
-  } finally {
-    saving = false;
-    if (again) { again = false; scheduleSave(); }
-  }
-}
+const scheduleSave = (ms = 0) => saver.schedule(ms);
 
 // --- 출력 ---
 
+const publishNotice = () => p.publish({ notice: notice ?? loadingNotice });
 function setNotice(text) {
   notice = text ?? null;
-  p.publish({ notice });
+  publishNotice();
+}
+function setLoadingNotice(text) {
+  loadingNotice = text ?? null;
+  publishNotice();
 }
 const clearNotice = () => { if (notice !== null) setNotice(null); };
 
@@ -199,12 +195,15 @@ function addCards(cards, full) {
   else if (cards.length) clearNotice();
 }
 
+// 넣기 동작은 시작이 끝날 때까지 기다렸다가 순서대로 실행한다.
 async function onFiles({ event } = {}) {
-  if (!thumbs || !event || event.cancelled) return;
+  if (!event || event.cancelled) return;
   const files = Array.isArray(event.files) ? event.files : [];
   if (!files.length) return;
-  const { cards, full } = await ingestFiles(files, ingestDeps());
-  addCards(cards, full);
+  await ready.run(async () => {
+    const { cards, full } = await ingestFiles(files, ingestDeps());
+    addCards(cards, full);
+  });
 }
 
 // --- 동작 ---
@@ -213,12 +212,13 @@ p.handle('drop', onFiles);
 p.handle('pick', onFiles);
 
 p.handle('add_text', async ({ event } = {}) => {
-  if (!thumbs) return;
   const raw = typeof event === 'string' ? event : p.getState('draft');
   if (typeof raw !== 'string' || !raw.trim()) return;
-  const { card, full } = await ingestText(raw, ingestDeps());
-  addCards(card ? [card] : [], full);
-  if (card) p.setState('draft', '');
+  await ready.run(async () => {
+    const { card, full } = await ingestText(raw, ingestDeps());
+    addCards(card ? [card] : [], full);
+    if (card) p.setState('draft', '');
+  });
 });
 
 function setMode(mode) {
@@ -361,37 +361,76 @@ p.onSurface(SURFACE, (surface) => {
   if (surface) ui = { ...ui, size: { w: surface.cssWidth, h: surface.cssHeight } };
 });
 
-// 다른 PC의 변경. 시작하는 동안 온 값도 받으려고 읽기 전에 건다.
-let loaded = false;
-p.storage.watch(BOARDS_ENTRY, (value) => {
+// 창을 닫을 때 쉘은 closing 리스너가 돌려준 promise와 이미 보낸 setStorage를 기다린다.
+// 디바운스 중인 저장과 읽기 단계에 있는 저장을 여기서 끝낸다.
+p.onLifecycle((lifecycle) => (lifecycle?.phase === 'closing' ? saver.flush() : undefined));
+
+function finishBoardsLoad(value) {
   doc = mergeBoards(doc, value);
-  if (!loaded) return;
+  if (loaded) return;
+  loaded = true;
   refresh(false);
-  if (selectedId) publishSelected();
-}, (err) => setNotice(err?.message ?? '보드를 읽지 못했어요'));
-for (let i = 0; i < SHARDS; i++) {
-  const id = shardIdOf(i);
-  // 썸네일 저장소가 만들어지기 전에 온 값은 버린다. 저장소가 시작할 때 같은 항목을 새로 읽는다.
-  p.storage.watch(id, (value) => {
-    if (!thumbs) return;
-    thumbs.reload(id, value);
-    renderer.invalidateThumbs();
-    if (cardById(selectedId)?.hasThumb) publishSelected();
-  }, () => { /* 한 shard를 못 읽어도 나머지 썸네일은 그린다 */ });
 }
 
+// 다른 PC의 변경. 시작하는 동안 온 값도 받으려고 읽기 전에 건다.
+p.storage.watch(BOARDS_ENTRY, (value) => {
+  if (!loaded) { finishBoardsLoad(value); updateLoading(); return; }
+  doc = mergeBoards(doc, value);
+  refresh(false);
+  if (selectedId) publishSelected();
+}, () => { /* 시작 읽기의 재시도가 알린다 */ });
+
+// 썸네일 저장소가 생기기 전에 온 shard 값은 모아 두었다가(마지막 값이 이긴다) 저장소가 생기면 적용한다.
+const pendingShards = new Map();
+function applyShard(id, value) {
+  thumbs.reload(id, value);
+  renderer.invalidateThumbs();
+  if (cardById(selectedId)?.hasThumb) publishSelected();
+  updateLoading();
+}
+for (let i = 0; i < SHARDS; i++) {
+  const id = shardIdOf(i);
+  p.storage.watch(id, (value) => {
+    if (!thumbs) { pendingShards.set(id, value); return; }
+    applyShard(id, value);
+  }, () => { /* 시작 읽기의 재시도가 알린다 */ });
+}
+
+let retrying = false;
+function updateLoading() {
+  const done = loaded && thumbs && thumbs.missing().length === 0;
+  if (done) setLoadingNotice(null);
+  else setLoadingNotice(retrying ? RETRYING_NOTICE : LOADING_NOTICE);
+  if (loaded && thumbs) ready.open();
+}
+const onReadFail = () => { if (!retrying) { retrying = true; updateLoading(); } };
+
 async function start() {
-  p.publish({ selected: null, selectedUrl: null, notice: null, exportInfo: '', boardOptions: [], board: null, boardName: '' });
+  p.publish({ selected: null, selectedUrl: null, exportInfo: '', boardOptions: [], board: null, boardName: '' });
+  publishNotice();
   publishMode();
   const saved = p.getState('board');
   if (typeof saved === 'string') boardId = saved;
 
-  doc = mergeBoards(doc, await p.storage.get(BOARDS_ENTRY));
-  loaded = true;
-  refresh(false);
+  // boards와 shard 읽기를 함께 시작한다. 실패한 읽기는 1·2·4초, 그다음 10초마다 다시 한다.
+  const boardsLoad = retryRead(() => p.storage.get(BOARDS_ENTRY), { onFail: onReadFail, stop: () => loaded })
+    .then((r) => { if (!r.stopped) finishBoardsLoad(r.value); updateLoading(); });
 
+  // 읽은 shard만으로 저장소를 만든다. 못 읽은 shard는 읽힐 때까지 쓰기를 받지 않는다.
   thumbs = await createThumbStore(p.storage, { shards: SHARDS });
+  for (const [id, value] of pendingShards) thumbs.reload(id, value);
+  pendingShards.clear();
   renderer.invalidateThumbs();
+  const missing = thumbs.missing();
+  if (missing.length) onReadFail();
+  updateLoading();
+  await Promise.all([
+    boardsLoad,
+    ...missing.map((id) => retryRead(() => p.storage.get(id), {
+      onFail: onReadFail,
+      stop: () => !thumbs.missing().includes(id),
+    }).then((r) => { if (!r.stopped) applyShard(id, r.value); })),
+  ]);
 }
 
 start().catch((err) => setNotice(err?.message ?? '보드를 읽지 못했어요'));
