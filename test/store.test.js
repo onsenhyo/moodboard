@@ -13,13 +13,14 @@ const board = (id, cards, updatedAt = 1, extra = {}) => ({ id, name: id, cards, 
 const doc = (...boards) => ({ version: 1, boards });
 
 // 가짜 어댑터: 값은 복사해 보관하고, conflicts 횟수만큼 set이 충돌한다.
-function fakeAdapter(initial = {}, { conflicts = 0, onConflict } = {}) {
+// only를 주면 그 항목에 쓸 때만 충돌한다.
+function fakeAdapter(initial = {}, { conflicts = 0, onConflict, only } = {}) {
   const data = new Map(Object.entries(initial).map(([k, v]) => [k, structuredClone(v)]));
   const a = {
     data, sets: [], gets: 0, conflicts,
     async get(entry) { a.gets++; return data.has(entry) ? structuredClone(data.get(entry)) : null; },
     async set(entry, value) {
-      if (a.conflicts > 0) { a.conflicts--; onConflict?.(data); throw CONFLICT; }
+      if (a.conflicts > 0 && (only === undefined || only === entry)) { a.conflicts--; onConflict?.(data); throw CONFLICT; }
       a.sets.push([entry, structuredClone(value)]);
       data.set(entry, structuredClone(value));
     },
@@ -356,4 +357,91 @@ test('ThumbStore: 다른 shard에 있던 카드를 바꿔 넣으면 옛 shard에
   assert.deepEqual(Object.keys(a.data.get('thumbs_000')), ['big']);
   assert.deepEqual(a.data.get('thumbs_001'), { a: 'z'.repeat(200) });
   assert.equal(await s.get('a'), 'z'.repeat(200));
+});
+
+// --- fix round 1: 쓰기 전 읽기, 이동 시 색인 보존, reload ---
+
+const keysOf = (a, id) => Object.keys(a.data.get(id) ?? {});
+
+test('ThumbStore: 옮긴 뒤 옛 shard 정리가 충돌해도 get은 새 썸네일을 돌려주고 remove는 모든 사본을 지운다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: 'x', big: 'y'.repeat(900) } }, {
+    conflicts: 1, only: 'thumbs_000',
+    onConflict: (data) => data.set('thumbs_000', { ...data.get('thumbs_000'), other: 'o' }),
+  });
+  const s = await createThumbStore(a, { shards: 2, shardLimit: 1000 });
+  const z = 'z'.repeat(250);
+  await s.put('a', z);
+  assert.equal(await s.get('a'), z);
+  assert.deepEqual(keysOf(a, 'thumbs_000'), ['big', 'other']);
+  assert.deepEqual(keysOf(a, 'thumbs_001'), ['a']);
+  assert.equal(await s.get('other'), 'o');
+  await s.remove('a');
+  assert.equal(await s.get('a'), null);
+  assert.deepEqual(keysOf(a, 'thumbs_001'), []);
+});
+
+test('ThumbStore: 옛 shard 정리가 끝내 실패해도 put은 성공하고, 그 shard의 다음 쓰기에서 사본을 걷어낸다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: 'x', big: 'y'.repeat(900) } }, { conflicts: 3, only: 'thumbs_000' });
+  const s = await createThumbStore(a, { shards: 2, shardLimit: 1000 });
+  const z = 'z'.repeat(250);
+  assert.equal(await s.put('a', z), undefined);
+  assert.equal(await s.get('a'), z);
+  assert.deepEqual(keysOf(a, 'thumbs_000'), ['a', 'big'], '정리 실패로 옛 사본이 남음');
+  // 옛 사본이 남은 shard를 다시 받아도 색인은 새 shard를 가리킨다.
+  s.reload('thumbs_000', a.data.get('thumbs_000'));
+  assert.equal(await s.get('a'), z);
+  // thumbs_000에 대한 다음 쓰기에서 옛 사본이 빠진다.
+  await s.remove('big');
+  assert.deepEqual(keysOf(a, 'thumbs_000'), []);
+  assert.equal(await s.get('a'), z);
+});
+
+test('ThumbStore: 캐시가 낡았을 때 put은 다른 PC가 그 사이 넣은 썸네일을 지우지 않는다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: 'AAA' } });
+  const s = await createThumbStore(a, { shards: 2 });
+  // 이 창 모르게 다른 PC가 쓴다(충돌 없이 기준 판이 앞서간 경우).
+  a.data.set('thumbs_000', { a: 'AAA', other: 'OOO' });
+  await s.put('mine', 'MMM');
+  assert.deepEqual(a.data.get('thumbs_000'), { a: 'AAA', other: 'OOO', mine: 'MMM' });
+  assert.equal(await s.get('other'), 'OOO');
+});
+
+test('ThumbStore: 캐시가 낡았을 때 remove도 다른 PC의 썸네일을 지우지 않는다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: 'AAA' } });
+  const s = await createThumbStore(a, { shards: 1 });
+  a.data.set('thumbs_000', { a: 'AAA', other: 'OOO' });
+  await s.remove('a');
+  assert.deepEqual(a.data.get('thumbs_000'), { other: 'OOO' });
+});
+
+test('ThumbStore: 새로 읽은 shard가 차 있으면 한도를 넘기지 않고 다음 shard에 쓴다(캐시가 낡은 경우)', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: KB300 } });
+  const s = await createThumbStore(a, { shards: 2 });
+  a.data.set('thumbs_000', { a: KB300, o1: KB300, o2: KB300 });
+  await s.put('mine', KB300);
+  assert.deepEqual(keysOf(a, 'thumbs_000'), ['a', 'o1', 'o2']);
+  assert.deepEqual(keysOf(a, 'thumbs_001'), ['mine']);
+  for (const [, v] of a.sets) assert.ok(Buffer.byteLength(JSON.stringify(v)) <= 1_000_000);
+});
+
+test('ThumbStore: reload는 그 shard의 get 결과만 바꾸고 다른 shard의 색인은 지킨다', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: 'AAA' }, thumbs_001: { b: 'BBB' } });
+  const s = await createThumbStore(a, { shards: 2 });
+  s.reload('thumbs_000', { c: 'CCC', a: 'A2' });
+  assert.equal(await s.get('a'), 'A2');
+  assert.equal(await s.get('c'), 'CCC');
+  assert.equal(await s.get('b'), 'BBB');
+  s.reload('thumbs_000', null);
+  assert.equal(await s.get('a'), null);
+  assert.equal(await s.get('c'), null);
+  assert.equal(await s.get('b'), 'BBB');
+  s.reload('thumbs_999', { z: 'Z' }); // 범위 밖은 무시
+  assert.equal(await s.get('z'), null);
+  assert.equal(a.sets.length, 0, 'reload는 쓰지 않는다');
+});
+
+test('saveWithRetry: tries가 0이어도 한 번은 시도한다', async () => {
+  const a = fakeAdapter({ boards: doc() });
+  await saveWithRetry(a, (d) => d, { tries: 0, now: () => 0 });
+  assert.equal(a.sets.length, 1);
 });
