@@ -20,10 +20,13 @@
   - `yt_oembed`: `https://www.youtube.com` · `["/oembed"]`
   - `yt_thumb`: `https://i.ytimg.com` · `["/vi/"]`
   - `pin_oembed`: `https://www.pinterest.com` · `["/oembed.json"]`
-  - `pin_img`: `https://i.pinimg.com` · `["/"]`가 루트만 맞추는지 Task 1에서 확인한다. 루트만 맞춘다면 실제 경로 접두어(예: `/originals/`, `/736x/`, `/564x/`)를 나열한다.
+  - `pin_img`: `https://i.pinimg.com` · `["/originals/","/1200x/","/736x/","/564x/","/474x/","/236x/"]` (Task 1에서 확인)
 - `pin.it` 주소는 지원하지 않는다. 카드 안내 문구는 정확히 `브라우저 주소창의 주소를 넣어 주세요`이다.
 - 원본 파일은 `blobs`에만 두고, 접두어는 `orig/`이다. 이미지는 `orig/<cardId>.<ext>`, 영상은 `orig/<cardId>.mp4`. 확장자는 원본 그대로 둔다.
-- 썸네일: 긴 변 800px JPEG에서 시작한다. 저장 단위 하나가 1MiB를 넘지 않게, 카드당 목표 ≤300KB로 품질 0.82→0.5, 다음에 크기 800→480 순으로 낮춘다.
+- 썸네일: JPEG, 긴 변 640px·품질 0.75에서 시작해 base64 길이 ≤100,000자가 될 때까지 품질 0.75→0.5, 다음에 크기 640→480 순으로 낮춘다(Task 1 결과로 확정).
+- 썸네일 저장: 고정 storage 항목 `thumbs_000`~`thumbs_127`(128개, 각 schema `{type:"object", additionalProperties:{type:"string"}}`, 값은 `{cardId: base64}`). 한도는 항목의 `JSON.stringify` 바이트 1,048,576이며 배치 상한은 1,000,000바이트로 둔다. 128개가 업로드에서 거부되면 32개로 줄인다(사용자 승인).
+- storage 오류: 충돌은 `{code:'conflict', id:'STORAGE_ITEM_WRITE_CONFLICT'}`, 크기 초과는 `{id:'STORAGE_WRITE_JSON_TOO_LARGE'}`. 충돌 뒤에는 반드시 `getStorage`로 다시 읽은 다음 써야 한다(그냥 재시도하면 계속 충돌).
+- canvas `on_pointer` 이벤트: `event = {phase:'down'|'move'|'up'|'cancel', pointer_id, x, y, buttons, shift, alt, ctrl, meta}`, x·y는 그린 영역 기준 0~1. move는 버튼 없이도 오며 프레임당 하나로 합쳐진다.
 - 내보내기: 예상 크기가 50MB를 넘으면 경고하고, 95MB를 넘으면 막는다. 쓰기는 4MiB 조각 단위로 `files.write(sink, offset, bytes)`를 부른다.
 - MP4 썸네일은 1초 지점의 장면이다. 영상이 1초보다 짧으면 0초 장면을 쓴다.
 - 글 카드의 기본 색은 `#9e9e9e`이다. 채도가 0.15 미만인 색은 무채색 구역으로 보낸다.
@@ -143,7 +146,7 @@ test('빈 입력', () => assert.equal(classifyInput('   '), null));
 
 ### Task 4: 저장 형식, 병합, 썸네일 배치
 
-Task 1의 결정(collection 방식 또는 묶음 방식)에 따라 `ThumbStore` 구현이 하나 정해진다. 인터페이스는 같다.
+Task 1 결과: client는 모음 문서를 쓸 수 없으므로 묶음(shard) 방식으로 `ThumbStore`를 구현한다.
 
 **Files:**
 - Create: `src/store.js`, `test/store.test.js`
@@ -156,15 +159,15 @@ Task 1의 결정(collection 방식 또는 묶음 방식)에 따라 `ThumbStore` 
     - 보드와 카드를 id 기준으로 합친다. 같은 id면 `updatedAt`이 큰 쪽을 쓴다.
     - 삭제는 `deleted:true` 묘비로 남긴다. 묘비는 30일 뒤 정리한다.
   - `saveWithRetry(adapter, mutate:(doc)=>doc, {tries:3}) -> Promise<BoardsDoc>`: CAS 실패 시 다시 읽고 `mergeBoards` 후 재시도한다.
-  - `packThumbs(existing: Map<shardId, Map<cardId,b64>>, add:{cardId,b64}, {shardLimit:1_000_000, shards:32}) -> {shardId} | {error:'full'}` (묶음 방식일 때)
+  - `packThumbs(existing: Map<shardId, Map<cardId,b64>>, add:{cardId,b64}, {shardLimit:1_000_000, shards:128}) -> {shardId} | {error:'full'}`; shardId는 `thumbs_000` 형식
   - `ThumbStore = {get(cardId)->Promise<b64|null>, put(cardId,b64)->Promise<void|{error:'full'}>, remove(cardId)}`
 
 - [ ] **Step 1: 실패하는 테스트**
   - 병합: 로컬과 원격에 각자 새 카드가 하나씩 있으면 둘 다 남는다. 같은 카드를 양쪽에서 옮겼으면 `updatedAt`이 큰 쪽 좌표가 남는다. 한쪽이 삭제했으면 묘비가 이긴다.
   - `saveWithRetry`: 가짜 어댑터가 첫 번째 쓰기에서 `conflict`를 던지면, 다시 읽고 병합한 값으로 두 번째에 성공한다. 세 번 다 실패하면 에러를 던진다.
-  - `packThumbs`: 300KB 썸네일 4장이 들어가면 같은 shard에 3장, 다음 shard에 1장이 놓인다. 32개 shard가 다 차면 `{error:'full'}`을 돌려준다. 어떤 shard도 직렬화 크기가 1,000,000바이트를 넘지 않는다.
+  - `packThumbs`: 300KB 썸네일 4장이 들어가면 같은 shard에 3장, 다음 shard에 1장이 놓인다(테스트는 `shards` 옵션을 작게 줘도 된다). 모든 shard가 다 차면 `{error:'full'}`을 돌려준다. 어떤 shard도 직렬화 크기가 1,000,000바이트를 넘지 않는다.
 - [ ] **Step 2:** `npm test`를 실행해 FAIL을 확인한다.
-- [ ] **Step 3:** 구현한다. storage 쓰기의 CAS 오류를 어떻게 판별하는지는 `sandbox-frame.ts`의 `setStorage` 실패 형태에서 확인해 `isConflict(err)`로 감싼다.
+- [ ] **Step 3:** 구현한다. storage 쓰기의 충돌 판별은 `isConflict(err) = err?.code === 'conflict'`이다.
 - [ ] **Step 4:** `npm test`를 실행해 PASS를 확인한다.
 - [ ] **Step 5: Commit** `git commit -am "보드 저장, 병합, 썸네일 저장소"`
 
@@ -186,7 +189,7 @@ Task 1의 결정(collection 방식 또는 묶음 방식)에 따라 `ThumbStore` 
     - `pin_short`와 `link`는 썸네일 없는 카드다. `pin_short`에는 `note:'브라우저 주소창의 주소를 넣어 주세요'`를 단다.
     - HTTP가 실패하면 링크 카드로 내려간다.
   - `thumb.js` (브라우저 전용, 테스트하지 않는다): `makeThumb(bytes, mime) -> Promise<{jpegB64, pixels: Uint8ClampedArray}|null>`
-    - 이미지는 `createImageBitmap`으로 연다. 영상은 `<video>`의 blob URL에서 `currentTime = min(1, duration)` 후 `seeked`를 기다린다.
+    - 이미지는 `createImageBitmap`으로 연다. 영상은 `<video>`의 blob URL에서 `currentTime = min(1, duration)` 후 `seeked`, 이어서 `requestVideoFrameCallback`을 기다린 뒤 그린다(`seeked`에서 바로 그리면 검은 화면).
     - 썸네일 크기와 품질 단계는 Global Constraints를 따른다. `pixels`는 64×64로 줄인 RGBA이다.
 
 - [ ] **Step 1: 실패하는 테스트** (deps는 가짜로 넣는다)

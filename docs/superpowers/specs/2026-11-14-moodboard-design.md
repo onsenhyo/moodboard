@@ -44,7 +44,7 @@ kaleidoscope 앱으로 만들고, 공유할 때만 정적 웹페이지 하나로
 - **여러 PC에서 씁니다(사용자 답변).** 이를 위해 사용자가 원격 서버(별도 orchestrator)를 띄우고 각 PC의 쉘을 연결합니다. 앱 `storage`는 서버를 통해 계정 단위로 동기화되지만, client `blobs`는 기기별이라 동기화되지 않습니다.
 - 그래서 저장은 이렇게 나눕니다.
   - **보드 메타데이터**(카드 목록, 위치, 색, 텍스트, 링크): 보드마다 `storage` 문서 하나. 동기화됩니다.
-  - **썸네일**: 카드마다 `storage` 모음(collection) 문서 하나에 JPEG를 base64로 넣습니다. 긴 변 800px에서 시작해, 문서 한도 1MiB 안에 들 때까지 품질과 크기를 낮춥니다. 목표는 300KB 이하입니다. 동기화됩니다.
+  - **썸네일**: client가 모음 문서를 쓸 수 없어서(Task 1 확인) 고정 항목 `thumbs_000`~`thumbs_127`에 나눠 담습니다. 카드당 base64 약 100KB(긴 변 640px)이며, 전체 약 1,200장이 한도입니다(사용자 승인). 동기화됩니다.
   - **원본 이미지와 MP4**: 넣은 PC의 `blobs`(`device_storage.prefixes`)에만 둡니다.
 - 원본이 없는 PC에서 동작하는 방식은 다음과 같습니다. 이미지 크게 보기에는 썸네일을 씁니다. MP4는 정지 장면과 "원본은 다른 PC에 있음" 안내를 보여 줍니다. "재생 포함" 내보내기는 원본이 있는 PC에서만 켤 수 있습니다.
 - client가 모음 문서를 읽고 쓸 수 있는지(`storage_entries`)는 빌더가 먼저 확인합니다. 안 되면 계획을 세우기 전에 알려 주어야 합니다.
@@ -52,7 +52,7 @@ kaleidoscope 앱으로 만들고, 공유할 때만 정적 웹페이지 하나로
   - `https://www.youtube.com/` 의 `/oembed` (제목)
   - `https://i.ytimg.com/` 의 `/vi/` (썸네일)
   - `https://www.pinterest.com/` 의 `/oembed.json` (핀 썸네일 주소)
-  - `https://i.pinimg.com/` 의 `/` 아래 경로 (핀 이미지)
+  - `https://i.pinimg.com/` 의 `/originals/`, `/1200x/`, `/736x/`, `/564x/`, `/474x/`, `/236x/` (핀 이미지)
 - 사용자는 핀터레스트 링크를 웹 브라우저 주소창에서 복사합니다(사용자 답변). `kr.pinterest.com`, `pinterest.co.kr` 같은 주소는 핀 ID를 뽑아 `www.pinterest.com/pin/<id>/`로 바꾼 뒤 oEmbed에 넣습니다. `pin.it` 짧은 주소는 리다이렉트라서 지원하지 않고, 카드에 "브라우저 주소창의 주소를 넣어 주세요"라고 안내합니다. worker는 쓰지 않습니다. 그 외 링크는 썸네일 없이 제목(URL)만 있는 카드가 됩니다.
 - 내보내기는 `files.save_prompt` → `files.write` 순서로 하며, 매번 OS 저장 창이 뜹니다.
 - 바깥 링크는 client가 직접 열 수 없습니다. 선택한 카드의 URL을 state에 두고, 옆 칸의 `open_url` 버튼이나 `web_view`로 엽니다.
