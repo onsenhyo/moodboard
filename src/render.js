@@ -69,6 +69,15 @@ function hostOf(url) {
   try { return new URL(url).hostname; } catch { return String(url ?? ''); }
 }
 
+// 사각형 안쪽에 1px 선을 긋는다(카드 크기를 넘지 않게).
+function strokeInside(ctx, color, s) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(s.x + 0.5, s.y + 0.5, Math.max(0, s.w - 1), Math.max(0, s.h - 1));
+  ctx.restore();
+}
+
 function setLetterSpacing(ctx, v) {
   if ('letterSpacing' in ctx) ctx.letterSpacing = v;
 }
@@ -149,13 +158,19 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
 
   // --- 바탕 ---
 
-  function drawBackground(ctx, th, view, w, h) {
+  // 바탕은 변환 없이 backing store 전체를 칠한다. 가장자리 한 픽셀도 비워 두지 않는다
+  // (비면 쉘 .ks-canvas의 어두운 바탕이 비친다).
+  function drawBackground(ctx, th, view, w, h, dpr) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = th.bg;
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.restore();
     const g = th.grid;
     if (!g) return;
-    // 점 격자는 화면 px 간격으로 두고, 끌어 옮기면 함께 밀린다.
-    const step = g.step;
+    // 점 격자는 세계 좌표 간격이라 끌고 확대하면 함께 움직인다. 너무 촘촘해지면 간격을 두 배로 늘린다.
+    let step = g.step * view.scale;
+    while (step < 10) step *= 2;
     const ox = ((-view.x * view.scale) % step + step) % step;
     const oy = ((-view.y * view.scale) % step + step) % step;
     const r = g.r ?? 1;
@@ -178,7 +193,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
 
     // 접기 글리프: interaction.js의 접기 판정 영역(상자 안 왼쪽 위 24×28) 가운데
     const tg = groupToggle(group, box);
-    ctx.font = GROUP_TOGGLE_FONT;
+    ctx.font = th.uiFont ?? GROUP_TOGGLE_FONT;
     ctx.fillStyle = th.groupLabelInk;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -229,6 +244,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     ctx.fillStyle = th.textBg;
     ctx.fillRect(s.x, s.y, s.w, s.h);
     const bar = th.textAccentBar ? th.textAccentWidth ?? 3 : 0;
+    if (th.textBorder) strokeInside(ctx, th.textBorder, s);
     if (bar) {
       ctx.fillStyle = card.color || '#9e9e9e';
       ctx.fillRect(s.x, s.y, bar, s.h);
@@ -257,6 +273,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
   function drawLink(ctx, th, card, s) {
     ctx.fillStyle = th.linkBg;
     ctx.fillRect(s.x, s.y, s.w, s.h);
+    if (th.linkBorder) strokeInside(ctx, th.linkBorder, s);
     if (s.w < 40 || s.h < 30) return;
     const pad = 10;
     ctx.textBaseline = 'top';
@@ -271,6 +288,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
   function drawPlaceholder(ctx, th, card, s) {
     ctx.fillStyle = th.placeholderBg;
     ctx.fillRect(s.x, s.y, s.w, s.h);
+    if (th.border) strokeInside(ctx, th.border, s);
     if (s.w < 40 || s.h < 30) return;
     ctx.fillStyle = th.placeholderInk;
     ctx.font = th.placeholderFont;
@@ -280,7 +298,8 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
 
   function drawBadge(ctx, th, card, at, inner) {
     const b = BADGE[card.kind];
-    if (!b || inner.w < 32 || inner.h < 32) return;
+    // 글 카드는 색 띠로 충분하다(뷰어와 같음). 배지가 글 위에 겹치지 않게 뺀다.
+    if (!b || card.kind === 'text' || inner.w < 32 || inner.h < 32) return;
     ctx.font = th.badgeFont;
     ctx.textBaseline = 'middle';
     const w = ctx.measureText(b).width + 10;
@@ -369,12 +388,20 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
 
   // --- 한 장 ---
 
-  function draw(t) {
+  // backing store를 지금 표면 크기(css × dpr)에 맞춘다. 크기를 바꾸면 캔버스가 비므로 바로 다시 그려야 한다.
+  function syncSize() {
     const { canvas, cssWidth, cssHeight, dpr } = surface;
     const width = Math.max(1, Math.round(cssWidth * dpr));
     const height = Math.max(1, Math.round(cssHeight * dpr));
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
+    let changed = false;
+    if (canvas.width !== width) { canvas.width = width; changed = true; }
+    if (canvas.height !== height) { canvas.height = height; changed = true; }
+    return changed;
+  }
+
+  function draw(t) {
+    syncSize();
+    const { canvas, cssWidth, cssHeight, dpr } = surface;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const th = theme() ?? THEMES.light;
@@ -403,7 +430,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     for (const item of drawList({ ...sc, cards, groups })) {
       if (item.kind === 'background') {
-        drawBackground(ctx, th, view, cssWidth, cssHeight);
+        drawBackground(ctx, th, view, cssWidth, cssHeight, dpr);
       } else if (item.kind === 'group') {
         const g = groupsById.get(item.id);
         const r = g && groupRect(g);
@@ -440,7 +467,11 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
       surface = next;
       onResize = null;
       if (!surface) return;
-      onResize = () => { if (surface.visible) schedule(); else stop(); };
+      // 크기가 바뀌면 같은 일 안에서 바로 다시 그린다. 비운 캔버스를 다음 프레임까지 두지 않는다.
+      onResize = () => {
+        if (!surface.visible) { stop(); return; }
+        if (syncSize()) { stop(); frame(); } else schedule();
+      };
       surface.resize.addEventListener('resize', onResize);
       schedule();
     },

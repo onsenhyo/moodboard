@@ -48,6 +48,26 @@
 - 둥근 모서리는 쓰지 않는다. 배지 칩도 각진 사각형이다.
 - 내보낸 페이지는 열어 보는 사람 브라우저의 `prefers-color-scheme`에 따라 A/B를 고른다.
 
+### 2026-11-15 수정: 쉘 팔레트에 맞춤
+
+왜: 사용자가 앱 v5 캔버스에 남긴 커멘트 "검정테두리가 너무 별로야… 혼자 베이지 배경인 것도 별로야 kaleidoscope랑 어울리게 알아서 잘 해줘". 위 표의 베이지 종이(라이트)와 #141416(다크)은 창 안에서 따로 노는 판처럼 보였다. 아래 값으로 바꾼다. 출처는 쉘 ui/src/styles/foundation.css의 토큰이다.
+
+| 토큰 | 라이트 | 다크 |
+|---|---|---|
+| 바탕(bg) | #f7f3f7 (surface-solid) | #2a2230 (surface-solid) |
+| 점 격자 | 20px, border 색 rgba(73,57,89,.14), 세계 좌표로 끌기·확대를 따름 | 20px, rgba(230,214,240,.13), 같음 |
+| 글꼴 | 쉘 UI 글꼴 목록('DM Sans Variable', 'Pretendard Variable', 'Segoe UI', 'Malgun Gothic', system-ui, sans-serif). Georgia·대문자 없음 | 같음 |
+| 사진 카드 | 각진 흰 매트 4px(아래도 4px, 캡션 줄 없음), 그림자 rgba(48,42,54,.10) 12/4 + rgba(48,42,54,.06) 2/1 | 꽉 참, 그림자 rgba(0,0,0,.35) 16/6 |
+| 종류 배지 | 각진 칩, surface-raised rgba(255,255,255,.5), 글 #302a36 | rgba(255,255,255,.11), 글 #ece3f2 |
+| 글 카드 | #ffffff, 1px border 선, 글 #302a36, 왼쪽 3px 카드 색 띠 | #342b3b, 글 #ece3f2, 같은 띠 |
+| 링크·자리표시 카드 | 링크 #ffffff + border 선, 자리표시 #efe9ef + border 선, 보조 글 muted #675a70 | #342b3b / #30283a, muted #b8a7c5 |
+| 묶음 | 채움 surface rgba(255,255,255,.36), 1px border 선, 이름은 상자 위 muted 12px 600, 색 점 | rgba(255,255,255,.07), 같음, muted #b8a7c5 |
+| 선택선 | 2px accent #6f569a | 2px accent #c6aee3 |
+
+- 둥근 모서리는 여전히 쓰지 않는다(사용자 요청).
+- 내보낸 페이지도 같은 토큰을 쓰고 prefers-color-scheme을 따른다. 페이지 바탕은 캔버스 바탕과 같다.
+- 검은 테두리: 쉘 .ks-canvas는 바탕이 #302a36이고 테두리가 14% 투명한 border 색이라, 캔버스를 끝까지 칠해도 테두리 1px 아래로 어두운 바탕이 비친다. 앱에서는 backing store를 매 프레임 css×dpr로 맞추고 전체를 바탕색으로 칠하며, 미리보기 캔버스의 투명한 빈 자리도 바탕색으로 칠한다. 테두리 1px 자체는 쉘을 고쳐야 없어진다.
+
 ## 5. 플랫폼 확인 필요
 - client 프레임 안의 `matchMedia('(prefers-color-scheme: dark)')`가 쉘 테마 설정(Tauri `window.set_theme`)을 따라 바뀌는지는 아직 확인하지 않았다. 첫 단계에서 실제로 확인한다.
 - 안 바뀌면 다음 순서로 대안을 찾는다.

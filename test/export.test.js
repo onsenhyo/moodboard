@@ -352,8 +352,8 @@ test('묶음이 없는 옛 보드도 groups는 빈 배열', async () => {
 
 test('뷰어 번들에 두 테마 바탕색이 모두 들어 있다', async () => {
   const js = await viewer();
-  assert.ok(js.includes('#f4f1ec'));
-  assert.ok(js.includes('#141416'));
+  assert.ok(js.includes('#f7f3f7'));
+  assert.ok(js.includes('#2a2230'));
   assert.ok(js.includes('prefers-color-scheme: dark'));
 });
 

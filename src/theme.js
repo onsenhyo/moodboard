@@ -1,101 +1,103 @@
 // 캔버스와 내보낸 페이지가 함께 쓰는 테마 토큰. 브라우저 API를 쓰지 않는다.
 //
-// THEMES = {light, dark}: 스펙 4장 표의 값. 글꼴은 ctx.font에 바로 넣을 수 있는 CSS 문자열이다.
+// THEMES = {light, dark}: 쉘 팔레트에 맞춘 값(스펙 2026-11-15 수정). 글꼴은 ctx.font에 바로 넣을 수 있는 CSS 문자열이다.
 // themeName(isDark) -> 'light'|'dark'
 // groupDotColor(cards) -> '#rrggbb': 채도 있는 카드 색의 hue 중앙값을 HSL(h, .55, .55)로 바꾼 값.
 
 import { colorSortKey } from './color.js';
 
-const SERIF = "Georgia, 'Times New Roman', serif";
-const SANS = 'system-ui, -apple-system, sans-serif';
+// 쉘(kaleidoscope ui/src/styles/foundation.css)의 --ks-font-family와 같은 글꼴 목록.
+// 프레임 안에는 DM Sans와 Pretendard가 없을 수 있으므로 시스템 글꼴로 이어진다.
+const UI = "'DM Sans Variable', 'Pretendard Variable', 'Segoe UI', 'Malgun Gothic', system-ui, -apple-system, sans-serif";
 const GRAY = '#9e9e9e';
 
-const light = {
-  bg: '#f4f1ec',
-  grid: null,
-  mat: { pad: 6, bottom: 22 },
-  matBg: '#ffffff',
-  shadow: [
-    { blur: 2, y: 1, color: 'rgba(0,0,0,.08)' },
-    { blur: 20, y: 8, color: 'rgba(0,0,0,.08)' },
-  ],
-  captionFont: `11px ${SERIF}`,
-  captionColor: '#666',
-  badgeBg: 'rgba(255,255,255,.9)',
-  badgeInk: '#555',
-  badgeFont: `600 10px ${SANS}`,
-  textBg: '#fffdf7',
-  textInk: '#3a352d',
-  textFont: `italic 13px ${SERIF}`,
-  textAccentBar: false,
-  textAccentWidth: 3,
-  loadingBg: '#e9e4dc',
-  placeholderBg: '#ddd6cb',
-  placeholderInk: '#3a352d',
-  placeholderFont: `12px ${SERIF}`,
-  linkBg: '#fffdf7',
-  linkInk: '#3a352d',
-  linkMuted: '#8a7f6e',
-  linkTitleFont: `600 14px ${SERIF}`,
-  linkUrlFont: `11px ${SERIF}`,
-  noteBg: 'rgba(30,28,25,.62)',
-  noteInk: '#ffffff',
-  noteFont: `11px ${SERIF}`,
-  groupFill: 'rgba(255,255,255,.35)',
-  groupLine: '#cfc7ba',
-  groupLabelFont: `600 11px ${SERIF}`,
-  groupLabelInk: '#8a7f6e',
-  groupLabelUpper: true,
-  groupLabelSpacing: '0.08em',
-  groupLabelGap: 4,
-  groupDot: false,
-  groupDotFallback: GRAY,
-  selectLine: '#3a352d',
-  selectWidth: 2,
-  uiFont: `12px ${SERIF}`,
+// 쉘 색 토큰. 캔버스 바탕은 surface-solid라서 창의 한 부분으로 읽힌다.
+export const SHELL = {
+  light: {
+    background: '#e4dde3', surface: 'rgba(255,255,255,.36)', surfaceRaised: 'rgba(255,255,255,.5)',
+    surfaceSolid: '#f7f3f7', border: 'rgba(73,57,89,.14)', text: '#302a36', muted: '#675a70',
+    accent: '#6f569a', accentSoft: '#a58cbb', accentContrast: '#ffffff',
+  },
+  dark: {
+    background: '#1d1822', surface: 'rgba(255,255,255,.07)', surfaceRaised: 'rgba(255,255,255,.11)',
+    surfaceSolid: '#2a2230', border: 'rgba(230,214,240,.13)', text: '#ece3f2', muted: '#b8a7c5',
+    accent: '#c6aee3', accentSoft: '#a47dba', accentContrast: '#241b2c',
+  },
 };
 
-const dark = {
-  bg: '#141416',
-  grid: { step: 18, dot: '#2a2a2e', r: 1 },
+function make(k, o) {
+  return {
+    bg: k.surfaceSolid,
+    // 점 격자: 세계 좌표 20px 간격, 끌고 확대하면 함께 움직인다.
+    grid: { step: 20, dot: k.border, r: 1 },
+    mat: o.mat,
+    matBg: o.mat ? '#ffffff' : null,
+    shadow: o.shadow,
+    captionFont: `11px ${UI}`,
+    captionColor: null, // 캡션 줄은 없다
+    badgeBg: k.surfaceRaised,
+    badgeInk: k.text,
+    badgeFont: `600 10px ${UI}`,
+    textBg: o.textBg,
+    textInk: k.text,
+    textFont: `13px ${UI}`,
+    textBorder: o.textBorder,
+    textAccentBar: true,
+    textAccentWidth: 3,
+    loadingBg: o.loadingBg,
+    placeholderBg: o.placeholderBg,
+    placeholderInk: k.muted,
+    placeholderFont: `12px ${UI}`,
+    linkBg: o.textBg,
+    linkBorder: o.textBorder,
+    linkInk: k.text,
+    linkMuted: k.muted,
+    linkTitleFont: `600 14px ${UI}`,
+    linkUrlFont: `11px ${UI}`,
+    noteBg: 'rgba(48,42,54,.72)',
+    noteInk: '#ffffff',
+    noteFont: `11px ${UI}`,
+    groupFill: k.surface,
+    groupLine: k.border,
+    groupLabelFont: `600 12px ${UI}`,
+    groupLabelInk: k.muted,
+    groupLabelUpper: false,
+    groupLabelSpacing: '0px',
+    groupLabelGap: 6,
+    groupDot: true,
+    groupDotFallback: GRAY,
+    selectLine: k.accent,
+    selectWidth: 2,
+    uiFont: `12px ${UI}`,
+    accent: k.accent,
+    accentContrast: k.accentContrast,
+    surfaceRaised: k.surfaceRaised,
+    border: k.border,
+    muted: k.muted,
+    surfaceSolid: k.surfaceSolid,
+  };
+}
+
+const light = make(SHELL.light, {
+  mat: { pad: 4, bottom: 4 },
+  shadow: [
+    { blur: 12, y: 4, color: 'rgba(48,42,54,.10)' },
+    { blur: 2, y: 1, color: 'rgba(48,42,54,.06)' },
+  ],
+  textBg: '#ffffff',
+  textBorder: SHELL.light.border,
+  loadingBg: '#efe9ef',
+  placeholderBg: '#efe9ef',
+});
+
+const dark = make(SHELL.dark, {
   mat: null,
-  matBg: null,
-  shadow: [{ blur: 30, y: 10, color: 'rgba(0,0,0,.6)' }],
-  captionFont: `11px ${SANS}`,
-  captionColor: null,
-  badgeBg: 'rgba(0,0,0,.55)',
-  badgeInk: '#eee',
-  badgeFont: `600 10px ${SANS}`,
-  textBg: '#232327',
-  textInk: '#e9e6df',
-  textFont: `13px ${SANS}`,
-  textAccentBar: true,
-  textAccentWidth: 3,
-  loadingBg: '#1e1e22',
-  placeholderBg: '#2c2c31',
-  placeholderInk: '#e9e6df',
-  placeholderFont: `12px ${SANS}`,
-  linkBg: '#232327',
-  linkInk: '#e9e6df',
-  linkMuted: '#9a9aa2',
-  linkTitleFont: `600 14px ${SANS}`,
-  linkUrlFont: `11px ${SANS}`,
-  noteBg: 'rgba(0,0,0,.62)',
-  noteInk: '#ffffff',
-  noteFont: `11px ${SANS}`,
-  groupFill: 'rgba(255,255,255,.04)',
-  groupLine: 'rgba(255,255,255,.10)',
-  groupLabelFont: `600 11px ${SANS}`,
-  groupLabelInk: '#bdbdc4',
-  groupLabelUpper: false,
-  groupLabelSpacing: '0px',
-  groupLabelGap: 6,
-  groupDot: true,
-  groupDotFallback: GRAY,
-  selectLine: '#e9e6df',
-  selectWidth: 2,
-  uiFont: `12px ${SANS}`,
-};
+  shadow: [{ blur: 16, y: 6, color: 'rgba(0,0,0,.35)' }],
+  textBg: '#342b3b',
+  textBorder: null,
+  loadingBg: '#30283a',
+  placeholderBg: '#30283a',
+});
 
 export const THEMES = { light, dark };
 

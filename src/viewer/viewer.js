@@ -20,36 +20,37 @@ const LABEL_ROOM = 24; // 맞춤 때 상자 위 이름 자리
 
 const shadowCss = (list) => (list ?? []).map((s) => `0 ${s.y}px ${s.blur}px ${s.color}`).join(',') || 'none';
 
-// THEMES 토큰을 CSS로 옮긴다. 둥근 모서리는 쓰지 않는다.
+// THEMES 토큰을 CSS로 옮긴다. 둥근 모서리는 쓰지 않는다. 점 격자의 크기와 자리는 applyView가 정한다.
 function themeCss(t) {
   const pad = t.mat ? t.mat.pad : 0;
   const bottom = t.mat ? t.mat.bottom : 0;
   const grid = t.grid
-    ? `background-image:radial-gradient(${t.grid.dot} ${t.grid.r}px,transparent ${t.grid.r}px);background-size:${t.grid.step}px ${t.grid.step}px;`
+    ? `background-image:radial-gradient(circle,${t.grid.dot} ${t.grid.r}px,transparent ${t.grid.r + 0.5}px);`
     : 'background-image:none;';
-  const barBg = t.matBg ?? t.textBg;
+  const shadow = shadowCss(t.shadow);
+  const lined = (line) => (line ? `inset 0 0 0 1px ${line}${shadow === 'none' ? '' : `,${shadow}`}` : shadow);
   return [
-    `html,body{background:${t.bg};color:${t.textInk}}`,
+    `html,body{background:${t.bg};color:${t.textInk};font:${t.uiFont}}`,
     `#stage{background-color:${t.bg};${grid}}`,
-    `#bar{background:${barBg};color:${t.textInk};border-bottom-color:${t.groupLine}}`,
+    `#bar{background:${t.bg};color:${t.textInk};border-bottom-color:${t.border}}`,
     `#bar h1{font:${t.linkTitleFont}}`,
-    `#bar button{font:${t.uiFont};color:${t.textInk};background:${t.textBg};border-color:${t.groupLine}}`,
-    `#bar button[aria-pressed=true]{background:${t.selectLine};border-color:${t.selectLine};color:${t.bg}}`,
+    `#bar button{font:${t.uiFont};color:${t.textInk};background:${t.surfaceRaised};border-color:${t.border}}`,
+    `#bar button[aria-pressed=true]{background:${t.accent};border-color:${t.accent};color:${t.accentContrast}}`,
     `.group{background:${t.groupFill};border-color:${t.groupLine}}`,
     `.group .label{font:${t.groupLabelFont};color:${t.groupLabelInk};letter-spacing:${t.groupLabelSpacing};`
       + `text-transform:${t.groupLabelUpper ? 'uppercase' : 'none'};padding-bottom:${t.groupLabelGap}px}`,
     `.group.collapsed .label{padding-bottom:0}`,
     `.group .gdot{display:${t.groupDot ? 'block' : 'none'}}`,
-    `.card{box-shadow:${shadowCss(t.shadow)};background:${t.placeholderBg}}`,
-    `.card.photo{background:${t.matBg ?? t.loadingBg}}`,
+    `.card{box-shadow:${lined(t.border)};background:${t.placeholderBg}}`,
+    `.card.photo{box-shadow:${shadow};background:${t.matBg ?? t.loadingBg}}`,
     `.card.photo .pic{inset:${pad}px ${pad}px ${bottom}px ${pad}px;background:${t.loadingBg}}`,
     `.card .cap{display:${t.captionColor ? 'block' : 'none'};font:${t.captionFont};color:${t.captionColor ?? 'inherit'}}`,
     `.card .badge{left:${pad + 6}px;top:${pad + 6}px;background:${t.badgeBg};color:${t.badgeInk};font:${t.badgeFont}}`,
-    `.card.text{background:${t.textBg};color:${t.textInk}}`,
+    `.card.text{background:${t.textBg};color:${t.textInk};box-shadow:${lined(t.textBorder)}}`,
     `.card.text .ph{font:${t.textFont};line-height:1.35;padding-left:${14 + (t.textAccentBar ? t.textAccentWidth : 0)}px}`,
     `.card .accent{display:${t.textAccentBar ? 'block' : 'none'};width:${t.textAccentWidth}px}`,
     `.card .tdot{display:${t.textAccentBar ? 'none' : 'block'}}`,
-    `.card.link{background:${t.linkBg};color:${t.linkInk}}`,
+    `.card.link{background:${t.linkBg};color:${t.linkInk};box-shadow:${lined(t.linkBorder)}}`,
     `.card.link .ph{font:${t.linkUrlFont};color:${t.linkMuted}}`,
     `.card.link .ph b{font:${t.linkTitleFont};color:${t.linkInk}}`,
     `.card.placeholder .ph{font:${t.placeholderFont};color:${t.placeholderInk}}`,
@@ -115,14 +116,18 @@ function start() {
   const themeStyle = el('style', { id: 'theme' });
   document.head.append(themeStyle);
   const mq = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
+  let theme = THEMES.light;
   const applyTheme = () => {
     const name = themeName(!!mq?.matches);
+    theme = THEMES[name];
     document.documentElement.setAttribute('data-theme', name);
     themeStyle.textContent = themeCss(THEMES[name]);
   };
   applyTheme();
-  if (mq?.addEventListener) mq.addEventListener('change', applyTheme);
-  else if (mq?.addListener) mq.addListener(applyTheme);
+  // 테마가 바뀌면 격자 간격도 다시 맞춘다. applyView는 아래에서 정하므로 처음 한 번은 부르지 않는다.
+  const onScheme = () => { applyTheme(); applyView(); };
+  if (mq?.addEventListener) mq.addEventListener('change', onScheme);
+  else if (mq?.addListener) mq.addListener(onScheme);
 
   // --- 화면 뼈대 ---
   const btn = (label, title) => el('button', { type: 'button', title: title || label, text: label });
@@ -206,6 +211,15 @@ function start() {
   }
   function applyView() {
     world.style.transform = `scale(${view.scale}) translate(${-view.x}px, ${-view.y}px)`;
+    // 점 격자는 세계 좌표 간격이라 끌고 확대하면 함께 움직인다(앱 캔버스와 같은 규칙).
+    const g = theme.grid;
+    if (!g) return;
+    let step = g.step * view.scale;
+    while (step < 10) step *= 2;
+    const ox = ((-view.x * view.scale) % step + step) % step;
+    const oy = ((-view.y * view.scale) % step + step) % step;
+    stage.style.backgroundSize = `${step}px ${step}px`;
+    stage.style.backgroundPosition = `${ox - step / 2}px ${oy - step / 2}px`;
   }
   // 맞춤은 보이는 것만 본다. 수동 배치에서는 묶음 상자와 그 위 이름 자리까지 넣는다.
   function visibleRects() {

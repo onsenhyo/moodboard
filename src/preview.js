@@ -1,7 +1,8 @@
 // 옆 칸의 썸네일 미리보기 canvas(브라우저 전용). image 블록은 data: 주소를 받지 않으므로
 // 원본이 없는 그림 카드의 썸네일을 이 표면에 contain으로 그린다.
 
-export function createPreview() {
+// theme() -> THEMES의 한 값. 비는 자리를 그 바탕색으로 칠한다(투명이면 쉘의 어두운 캔버스 바탕이 비친다).
+export function createPreview({ theme = () => null } = {}) {
   let surface = null;
   let onResize = null;
   let bitmap = null;
@@ -17,7 +18,8 @@ export function createPreview() {
     if (canvas.height !== h) canvas.height = h;
     const ctx = canvas.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = theme()?.bg ?? '#f7f3f7';
+    ctx.fillRect(0, 0, w, h);
     if (!bitmap) return;
     const s = Math.min(w / bitmap.width, h / bitmap.height);
     const dw = bitmap.width * s;
@@ -61,5 +63,5 @@ export function createPreview() {
     }
   }
 
-  return { attach, show };
+  return { attach, show, redraw: draw };
 }

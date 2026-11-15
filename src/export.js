@@ -115,8 +115,8 @@ const viewerGroup = (g) => ({
 // 둥근 모서리는 쓰지 않는다.
 const CSS = `
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;overflow:hidden;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
-@media (prefers-color-scheme: dark){html,body{background:#141416;color:#e9e6df}}
+html,body{margin:0;height:100%;overflow:hidden;background:#f7f3f7;color:#302a36;font:14px/1.4 "DM Sans Variable","Pretendard Variable","Segoe UI","Malgun Gothic",system-ui,-apple-system,sans-serif}
+@media (prefers-color-scheme: dark){html,body{background:#2a2230;color:#ece3f2}}
 #bar{position:fixed;top:0;left:0;right:0;height:44px;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid transparent;z-index:2}
 #bar h1{font-size:15px;font-weight:600;margin:0 auto 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bar button{font:inherit;border:1px solid transparent;padding:4px 10px;cursor:pointer}

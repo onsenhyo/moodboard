@@ -44,21 +44,20 @@ test('drawList: 선택선은 맨 끝에 그린다(카드 또는 묶음)', () => 
   assert.equal(drawList(scene({ selectedGroupId: 'g3' })).at(-1).kind, 'card');
 });
 
-test('cardChrome: 라이트 사진 카드는 흰 매트(6, 아래 22)와 종류 캡션, 그림자 2겹', () => {
+test('cardChrome: 라이트 사진 카드는 얇은 흰 매트(4, 아래 4)이고 캡션 줄이 없다, 그림자 2겹', () => {
   const s = rect(10, 20, 200, 150);
   const c = cardChrome(THEMES.light, card('a', { kind: 'youtube' }), s, 1);
   assert.deepEqual(c.outer, s);
-  assert.deepEqual(c.inner, { x: 16, y: 26, w: 188, h: 122 });
+  assert.deepEqual(c.inner, { x: 14, y: 24, w: 192, h: 142 });
   assert.equal(c.matBg, '#ffffff');
-  assert.equal(c.caption.text, 'youtube');
-  assert.equal(c.caption.y, 20 + 150 - 5);
+  assert.equal(c.caption, null);
   assert.equal(c.shadows.length, 2);
-  assert.deepEqual(c.badgeAt, { x: 22, y: 32 });
+  assert.deepEqual(c.badgeAt, { x: 20, y: 30 });
 });
 
-test('cardChrome: 매트는 배율을 따르고, 아랫단이 얇으면 캡션을 뺀다', () => {
+test('cardChrome: 매트는 배율을 따른다', () => {
   const c = cardChrome(THEMES.light, card('a'), rect(0, 0, 100, 75), 0.5);
-  assert.deepEqual(c.inner, { x: 3, y: 3, w: 94, h: 61 });
+  assert.deepEqual(c.inner, { x: 2, y: 2, w: 96, h: 71 });
   assert.equal(c.caption, null);
 });
 
@@ -91,10 +90,10 @@ test('groupBox: 접힌 묶음은 28px 제목줄만', () => {
   assert.deepEqual(groupBox({ collapsed: true }, s), { x: 0, y: 0, w: 300, h: 28 });
 });
 
-test('groupLabel: 펼침은 이름만(상자 위), 접힘은 이름 · N장, 라이트는 대문자', () => {
+test('groupLabel: 펼침은 이름만(상자 위), 접힘은 이름 · N장, 대문자로 바꾸지 않는다', () => {
   assert.equal(groupLabel(THEMES.dark, { name: 'Warm', collapsed: false }, 3), 'Warm');
   assert.equal(groupLabel(THEMES.dark, { name: 'Warm', collapsed: true }, 3), 'Warm · 3장');
-  assert.equal(groupLabel(THEMES.light, { name: 'Warm', collapsed: true }, 0), 'WARM · 0장');
+  assert.equal(groupLabel(THEMES.light, { name: 'Warm', collapsed: true }, 0), 'Warm · 0장');
 });
 
 test('groupToggle: 글리프는 상자 안 왼쪽 위 24×28 접기 영역 가운데', () => {

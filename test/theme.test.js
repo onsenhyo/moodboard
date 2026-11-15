@@ -13,59 +13,70 @@ test('두 테마 모두 브리프의 키를 가진다', () => {
   }
 });
 
-test('바탕색', () => {
-  assert.equal(THEMES.light.bg, '#f4f1ec');
-  assert.equal(THEMES.dark.bg, '#141416');
+test('바탕색은 쉘 surface-solid', () => {
+  assert.equal(THEMES.light.bg, '#f7f3f7');
+  assert.equal(THEMES.dark.bg, '#2a2230');
 });
 
-test('다크는 18px 점 격자, 라이트는 격자 없음', () => {
-  assert.deepEqual(THEMES.dark.grid, { step: 18, dot: '#2a2a2e', r: 1 });
-  assert.equal(THEMES.light.grid, null);
+test('두 테마 모두 20px 점 격자를 경계선 색으로', () => {
+  assert.deepEqual(THEMES.light.grid, { step: 20, dot: 'rgba(73,57,89,.14)', r: 1 });
+  assert.deepEqual(THEMES.dark.grid, { step: 20, dot: 'rgba(230,214,240,.13)', r: 1 });
 });
 
-test('라이트 매트는 6px, 아래 22px. 다크는 매트 없음', () => {
-  assert.deepEqual(THEMES.light.mat, { pad: 6, bottom: 22 });
+test('라이트 매트는 4px, 아래 4px. 다크는 매트 없음', () => {
+  assert.deepEqual(THEMES.light.mat, { pad: 4, bottom: 4 });
   assert.equal(THEMES.dark.mat, null);
 });
 
 test('그림자: 라이트 2겹, 다크 1겹', () => {
   assert.deepEqual(THEMES.light.shadow, [
-    { blur: 2, y: 1, color: 'rgba(0,0,0,.08)' },
-    { blur: 20, y: 8, color: 'rgba(0,0,0,.08)' },
+    { blur: 12, y: 4, color: 'rgba(48,42,54,.10)' },
+    { blur: 2, y: 1, color: 'rgba(48,42,54,.06)' },
   ]);
-  assert.deepEqual(THEMES.dark.shadow, [{ blur: 30, y: 10, color: 'rgba(0,0,0,.6)' }]);
+  assert.deepEqual(THEMES.dark.shadow, [{ blur: 16, y: 6, color: 'rgba(0,0,0,.35)' }]);
 });
 
-test('불리언 토큰', () => {
-  assert.equal(THEMES.light.groupLabelUpper, true);
-  assert.equal(THEMES.dark.groupLabelUpper, false);
-  assert.equal(THEMES.light.groupDot, false);
-  assert.equal(THEMES.dark.groupDot, true);
-  assert.equal(THEMES.light.textAccentBar, false);
-  assert.equal(THEMES.dark.textAccentBar, true);
+test('불리언 토큰: 두 테마 모두 대문자 없음, 점 있음, 색 띠 있음', () => {
+  for (const name of ['light', 'dark']) {
+    assert.equal(THEMES[name].groupLabelUpper, false);
+    assert.equal(THEMES[name].groupDot, true);
+    assert.equal(THEMES[name].textAccentBar, true);
+  }
 });
 
-test('글꼴은 px 크기와 대체 글꼴 목록을 가진다', () => {
-  assert.match(THEMES.light.textFont, /italic.*13px.*Georgia, 'Times New Roman', serif/);
-  assert.match(THEMES.dark.textFont, /13px.*system-ui, -apple-system, sans-serif/);
-  assert.match(THEMES.light.groupLabelFont, /11px.*Georgia/);
-  assert.match(THEMES.dark.groupLabelFont, /11px.*system-ui/);
-  assert.match(THEMES.light.captionFont, /11px.*Georgia/);
+test('글꼴은 쉘 UI 글꼴 목록이고 Georgia나 serif 글꼴이 없다', () => {
+  for (const name of ['light', 'dark']) {
+    for (const [k, v] of Object.entries(THEMES[name])) {
+      if (typeof v !== 'string') continue;
+      assert.ok(!v.includes('Georgia'), `${name}.${k}`);
+      assert.ok(!/(^|[ ,])serif/.test(v), `${name}.${k}`);
+    }
+    assert.match(THEMES[name].textFont, /13px 'DM Sans Variable', 'Pretendard Variable'.*sans-serif/);
+    assert.match(THEMES[name].groupLabelFont, /^600 12px 'DM Sans Variable'/);
+  }
 });
 
-test('스펙 표의 색', () => {
-  assert.equal(THEMES.light.captionColor, '#666');
-  assert.equal(THEMES.light.badgeInk, '#555');
-  assert.equal(THEMES.dark.badgeInk, '#eee');
-  assert.equal(THEMES.light.textBg, '#fffdf7');
-  assert.equal(THEMES.light.textInk, '#3a352d');
-  assert.equal(THEMES.dark.textBg, '#232327');
-  assert.equal(THEMES.dark.textInk, '#e9e6df');
-  assert.equal(THEMES.light.groupLine, '#cfc7ba');
-  assert.equal(THEMES.light.groupLabelInk, '#8a7f6e');
-  assert.equal(THEMES.dark.groupLabelInk, '#bdbdc4');
-  assert.equal(THEMES.light.selectLine, '#3a352d');
-  assert.equal(THEMES.dark.selectLine, '#e9e6df');
+test('쉘 팔레트의 색', () => {
+  assert.equal(THEMES.light.textBg, '#ffffff');
+  assert.equal(THEMES.light.textBorder, 'rgba(73,57,89,.14)');
+  assert.equal(THEMES.light.textInk, '#302a36');
+  assert.equal(THEMES.dark.textBg, '#342b3b');
+  assert.equal(THEMES.dark.textInk, '#ece3f2');
+  assert.equal(THEMES.light.groupFill, 'rgba(255,255,255,.36)');
+  assert.equal(THEMES.dark.groupFill, 'rgba(255,255,255,.07)');
+  assert.equal(THEMES.light.groupLine, 'rgba(73,57,89,.14)');
+  assert.equal(THEMES.light.groupLabelInk, '#675a70');
+  assert.equal(THEMES.dark.groupLabelInk, '#b8a7c5');
+  assert.equal(THEMES.light.badgeBg, 'rgba(255,255,255,.5)');
+  assert.equal(THEMES.light.badgeInk, '#302a36');
+  assert.equal(THEMES.dark.badgeInk, '#ece3f2');
+});
+
+test('선택선은 쉘 accent(검정 없음)', () => {
+  assert.equal(THEMES.light.selectLine, '#6f569a');
+  assert.equal(THEMES.dark.selectLine, '#c6aee3');
+  assert.equal(THEMES.light.selectLine, THEMES.light.accent);
+  assert.equal(THEMES.dark.selectLine, THEMES.dark.accent);
 });
 
 test('렌더러 동등성용 추가 키', () => {

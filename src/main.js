@@ -125,7 +125,7 @@ function youtubeId(url) {
   }
 }
 
-const preview = createPreview();
+const preview = createPreview({ theme: () => THEMES[themeKey] });
 let embedState; // 마지막으로 쓴 yt_embed. 같은 값을 다시 쓰지 않는다.
 
 // 옆 칸 출력. web_view의 url은 창 상태만 받으므로 유튜브 주소는 상태 yt_embed에도 쓴다.
@@ -225,6 +225,7 @@ function setTheme(name) {
   if (name !== themeKey) {
     themeKey = name;
     renderer.redraw();
+    preview.redraw();
   }
   p.setState('theme', name);
 }
