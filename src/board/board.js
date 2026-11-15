@@ -162,8 +162,8 @@ function syncUi() {
 
 // 패치는 쓰기가 성공할 때까지 줄에 남는다(ed.pending). 실패하면 조금 뒤 다시 저장한다.
 const saver = createSaver(async () => {
-  await ed.save();
-  refresh(false);
+  // 한도를 넘어 버린 편집이 있으면 save가 던진다. 그래도 남은 화면은 맞춰 둔다.
+  try { await ed.save(); } finally { refresh(false); }
 }, {
   onError: (err) => {
     showToast(err?.message ?? '저장하지 못했어요');
