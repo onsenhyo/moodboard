@@ -1,8 +1,7 @@
 // app/moodboard.json을 만든다. 썸네일 저장 항목 128개를 손으로 쓰지 않으려고 둔 스크립트다.
-// 사용: node scripts/gen-app.mjs [client 판] [보드 코드 조각 판] [export 판]   (npm run build 뒤에)
-//   client는 자산 moodboard(dist/moodboard.upload.js), 보드 코드 조각은 moodboard-board-js-1..N
-//   (dist/board-js-<i>.upload.js, 모든 조각이 같은 판), export는 moodboard-export(dist/export.upload.js).
-//   기본값 11 1 2. 올린 판과 맞춘다. 조각 수는 dist/assets.json에서 읽는다.
+// 사용: npm run build 뒤에 node scripts/gen-app.mjs
+//   자산 목록과 판은 dist/assets.json(scripts/pack.mjs가 scripts/versions.json의 판으로 남긴다)에서 읽어
+//   모두 선언한다. client와 sandbox 보드는 선언한 자산만 assets.bytes로 읽을 수 있다.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -10,19 +9,16 @@ import { dirname, join } from 'node:path';
 import { placeholderHtml } from '../src/boardhtml.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ASSET_ID = 'moodboard';
-const EXPORT_ASSET = 'moodboard-export'; // src/main.js의 EXPORT_ASSET과 같아야 한다.
-const [ASSET_VERSION, BOARD_JS_VERSION, EXPORT_VERSION] = [11, 1, 2].map((d, i) => Number(process.argv[2 + i] ?? d));
+const ASSET_ID = 'moodboard'; // 진입 로더
 const SHARDS = 128; // src/main.js와 src/board/board.js의 SHARDS와 같아야 한다.
 
-for (const v of [ASSET_VERSION, BOARD_JS_VERSION, EXPORT_VERSION]) {
-  if (!Number.isInteger(v) || v < 1) throw new Error('자산 판은 1 이상의 정수');
-}
-
-// 보드 코드 조각 id. client 로더가 같은 목록을 MOODBOARD_BOARD_PARTS로 갖는다(scripts/pack.mjs).
 const built = JSON.parse(readFileSync(join(ROOT, 'dist', 'assets.json'), 'utf8'));
-const BOARD_PARTS = built.filter((a) => a.group === 'board-js').sort((a, b) => a.part - b.part).map((a) => a.id);
-if (BOARD_PARTS.length === 0) throw new Error('dist/assets.json에 보드 코드 조각이 없습니다. npm run build를 먼저 하세요');
+const ASSETS = built.map((a) => ({ id: a.id, version: a.version }));
+for (const a of ASSETS) {
+  if (!Number.isInteger(a.version) || a.version < 1) throw new Error(`${a.id}: 자산 판은 1 이상의 정수`);
+}
+const entry = ASSETS.find((a) => a.id === ASSET_ID);
+if (!entry) throw new Error('dist/assets.json에 진입 로더가 없습니다. npm run build를 먼저 하세요');
 
 const shardId = (i) => 'thumbs_' + String(i).padStart(3, '0');
 
@@ -362,15 +358,11 @@ const app = {
     draft: '', board_name: '', board: null, yt_embed: null, rename_open: false, group_name: '', theme: 'light',
     selected: null, view: null, mode: 'manual', cmd: null, paste_inbox: null,
   },
-  assets: [
-    { id: ASSET_ID, version: ASSET_VERSION },
-    ...BOARD_PARTS.map((id) => ({ id, version: BOARD_JS_VERSION })),
-    { id: EXPORT_ASSET, version: EXPORT_VERSION },
-  ],
+  assets: ASSETS,
   storage: { entries: [boardsEntry, ...thumbEntries] },
   client: {
     runtime: 'javascript',
-    entry: { id: ASSET_ID, version: ASSET_VERSION },
+    entry: { id: ASSET_ID, version: entry.version },
     outputs: Object.fromEntries(Object.entries(outputs).map(([k, v]) => [k, { default: v }])),
     actions,
     state_keys: ['draft', 'board_name', 'yt_embed', 'rename_open', 'group_name', 'theme', ...BOARD_STATE],
@@ -392,5 +384,4 @@ const app = {
 
 mkdirSync(join(ROOT, 'app'), { recursive: true });
 writeFileSync(join(ROOT, 'app', 'moodboard.json'), JSON.stringify(app, null, 2) + '\n');
-console.log(`app/moodboard.json: 자산 ${ASSET_ID}@${ASSET_VERSION}, ${BOARD_PARTS.map((id) => `${id}@${BOARD_JS_VERSION}`).join(', ')}, `
-  + `${EXPORT_ASSET}@${EXPORT_VERSION}, 저장 항목 ${storageIds.length}개`);
+console.log(`app/moodboard.json: 자산 ${ASSETS.map((a) => `${a.id}@${a.version}`).join(', ')}, 저장 항목 ${storageIds.length}개`);

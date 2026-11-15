@@ -72,7 +72,19 @@
   "assets": [
     {
       "id": "moodboard",
-      "version": 11
+      "version": 12
+    },
+    {
+      "id": "moodboard-manifest",
+      "version": 1
+    },
+    {
+      "id": "moodboard-client-1",
+      "version": 1
+    },
+    {
+      "id": "moodboard-client-2",
+      "version": 1
     },
     {
       "id": "moodboard-board-js-1",
@@ -2078,7 +2090,7 @@
     "runtime": "javascript",
     "entry": {
       "id": "moodboard",
-      "version": 11
+      "version": 12
     },
     "outputs": {
       "selected": {
