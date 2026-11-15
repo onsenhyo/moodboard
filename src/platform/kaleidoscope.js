@@ -22,6 +22,8 @@ export function createPlatform(client) {
       putBytes: (key, bytes) => client.blobs.put({ key, bytes: exactBuffer(bytes) }),
       open: (key) => client.blobs.open({ key }),
       remove: (key) => client.blobs.remove({ key }),
+      // prefix로 시작하는 키 목록(string[]).
+      list: (prefix) => client.blobs.list({ prefix }),
       async has(key) {
         if (!key) return false;
         try {
