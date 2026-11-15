@@ -92,6 +92,18 @@ test('staleTombstones: 지운 지 7일이 지난 묘비만, 되살린 카드는 
   assert.deepEqual(staleTombstones(null, now), []);
 });
 
+test('staleTombstones: 지운 지 7일이 지난 보드의 카드는 모두, 막 지운 보드는 아니다', () => {
+  const now = 100 * GC_AGE_MS;
+  const doc = { boards: [
+    { id: 'gone', deleted: true, updatedAt: now - GC_AGE_MS, cards: [
+      { id: 'g1', updatedAt: now }, { id: 'g2', deleted: true, updatedAt: now },
+    ] },
+    { id: 'fresh', deleted: true, updatedAt: now - GC_AGE_MS + 1, cards: [{ id: 'f1', updatedAt: 0 }] },
+    { id: 'revived', deleted: false, updatedAt: 0, cards: [{ id: 'r1', updatedAt: 0 }] },
+  ] };
+  assert.deepEqual(staleTombstones(doc, now).map((c) => c.id), ['g1', 'g2']);
+});
+
 test('viewCenter: view 상태의 가운데, 없거나 틀리면 기본 자리', () => {
   assert.deepEqual(viewCenter({ cx: 10, cy: 20, scale: 2 }), { x: 10, y: 20, scale: 2 });
   assert.deepEqual(viewCenter(null), { ...DEFAULT_CENTER, scale: 1 });

@@ -47,14 +47,17 @@ export function deleteGroupPatches(board, id) {
   return out;
 }
 
-// 지운 지 minAgeMs 넘은 카드 묘비. client는 이 카드의 썸네일과 원본만 걷어낸다.
+// 지운 지 minAgeMs 넘은 카드 묘비와, 지운 지 minAgeMs 넘은 보드 묘비의 카드 전부.
+// client는 이 카드의 썸네일과 원본만 걷어낸다.
 // 묘비는 병합에서 뒤집힐 수 있으므로(더 늦은 편집이 이긴다) 지운 바로 뒤에는 걷지 않는다.
 export const GC_AGE_MS = 7 * 24 * 3600 * 1000;
 export function staleTombstones(doc, now, minAgeMs = GC_AGE_MS) {
   const out = [];
+  const old = (x) => now - (x.updatedAt ?? 0) >= minAgeMs;
   for (const b of doc?.boards ?? []) {
+    const boardGone = !!b && b.deleted === true && old(b);
     for (const c of b?.cards ?? []) {
-      if (c && c.deleted === true && now - (c.updatedAt ?? 0) >= minAgeMs) out.push(c);
+      if (c && (boardGone || (c.deleted === true && old(c)))) out.push(c);
     }
   }
   return out;

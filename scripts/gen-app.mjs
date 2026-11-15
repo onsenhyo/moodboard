@@ -170,7 +170,8 @@ const outputs = {
   has_group_selected: false,
   group_count_label: '', // 옆 칸 'N장'. 블록은 group_selected.count를 읽지 못해 main.js가 따로 낸다
   // 3차 A: 보드 배경과 글 카드 종이 색
-  board_bg: '#f7f3f7', // 툴바 [배경]. 보드 bg가 없으면 테마 bg
+  board_delete_text: '', // [보드 삭제] 확인 글(src/panel.js boardOutputs)
+  board_bg: '#f7f3f7', // 보드 메뉴 [배경색]. 보드 bg가 없으면 테마 bg
   has_board_bg: false,
   sel_paper: '#ffffff', // 옆 칸 [종이 색]. 카드 paper가 없으면 테마 textBg
   has_text_paper: false,
@@ -181,7 +182,7 @@ const actions = [
   'delete_selected', 'set_text_color', 'set_text', 'toggle_include_video', 'board_select', 'board_new',
   'board_rename', 'export', 'group_add', 'group_rename', 'group_delete',
   'set_board_bg', 'reset_board_bg', 'set_text_paper', 'reset_text_paper',
-  'set_card_label', 'set_card_memo',
+  'set_card_label', 'set_card_memo', 'board_delete',
 ];
 
 // --- 창 상태 ---
@@ -193,6 +194,13 @@ const BOARD_STATE = ['board', 'selected', 'view', 'mode', 'cmd', 'paste_inbox'];
 const c = (name) => ({ client: name });
 const when = (flag, child) => ({ type: 'when', value: c(flag), child });
 
+// 단추는 아이콘만 보이고 label은 쉘 도움말과 읽기 프로그램용 이름이다. 아이콘 이름은 쉘의 data-icons에 있는 것만 쓴다.
+const iconBtn = (icon, label, on_click, extra = {}) => ({ type: 'button', label, icon, icon_only: true, on_click, ...extra });
+const FILE_ACCEPT = [
+  { mime: 'image/*', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'heic', 'heif'] },
+  { mime: 'video/mp4', extensions: ['mp4', 'm4v'] },
+];
+
 const toolbar = {
   type: 'toolbar',
   start: [
@@ -200,38 +208,61 @@ const toolbar = {
       type: 'select', label: '보드', label_position: 'hidden',
       value: c('board'), options: c('board_options'), on_change: c('board_select'),
     },
-    { type: 'button', label: '새 보드', on_click: c('board_new') },
-    { type: 'button', label: '이름 바꾸기', on_click: [{ set_state: 'rename_open', value: true }] },
+    // 도구 막대에는 펼침 메뉴 단추가 없어, [⋯]는 보드 메뉴 대화상자(boardMenu)를 연다.
+    iconBtn('ellipsis', '보드 메뉴', [{ set_state: 'board_menu_open', value: true }]),
     {
       type: 'input', label: '링크나 글', label_position: 'hidden', placeholder: '링크나 글을 넣고 Enter',
       value: { state: 'draft' }, commit: 'submit', on_change: { set_state: 'draft' }, on_submit: c('add_text'),
     },
-    {
-      type: 'button', label: '파일 추가',
-      on_click: {
-        pick_files: {
-          accept: [
-            { mime: 'image/*', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'heic', 'heif'] },
-            { mime: 'video/mp4', extensions: ['mp4', 'm4v'] },
-          ],
-          multiple: true, client: 'pick',
-        },
-      },
-    },
-    { type: 'button', label: '묶음 추가', on_click: c('group_add') },
-    // 보드 배경. 값이 없으면 테마 바탕을 보이고, [기본 배경]은 보드의 bg 키를 지운다.
-    { type: 'color', label: '배경', value: c('board_bg'), on_change: c('set_board_bg') },
-    { type: 'button', label: '기본 배경', on_click: c('reset_board_bg') },
   ],
   end: [
-    { type: 'button', label: '색으로 정렬', variant: 'chip', pressed: c('sorted'), on_click: c('sort_color') },
-    { type: 'button', label: '내 배치', variant: 'chip', pressed: c('manual_mode'), on_click: c('sort_manual') },
-    { type: 'button', label: '−', description: '축소', on_click: c('zoom_out') },
-    { type: 'button', label: '+', description: '확대', on_click: c('zoom_in') },
-    { type: 'button', label: '맞춤', on_click: c('zoom_fit') },
+    iconBtn('upload', '파일 추가', { pick_files: { accept: FILE_ACCEPT, multiple: true, client: 'pick' } }),
+    iconBtn('folder', '묶음 추가', c('group_add')),
+    // 정렬 두 상태: 눌린 쪽이 지금 상태다.
+    iconBtn('paint-bucket', '색으로 정렬', c('sort_color'), { variant: 'chip', pressed: c('sorted') }),
+    iconBtn('grid-2x2', '내 배치', c('sort_manual'), { variant: 'chip', pressed: c('manual_mode') }),
+    iconBtn('zoom-out', '축소', c('zoom_out')),
+    iconBtn('zoom-in', '확대', c('zoom_in')),
+    iconBtn('maximize-2', '화면에 맞춤', c('zoom_fit')),
     // 단일 HTML 내보내기(src/export.js). 저장 창은 client가 save_prompt로 연다.
-    { type: 'button', label: '내보내기', on_click: c('export') },
+    iconBtn('share', '내보내기', c('export')),
   ],
+};
+
+// [⋯] 보드 메뉴. 줄 단추(row)는 아이콘과 글을 앞에 붙여 폭을 채운다.
+// client 동작은 set_state와 한 목록에 섞을 수 없어 [새 보드]는 client(board_new)가 메뉴를 닫는다.
+const rowBtn = (icon, label, on_click, extra = {}) => ({ type: 'button', variant: 'row', icon, label, on_click, ...extra });
+const closeMenu = { set_state: 'board_menu_open', value: false };
+const boardMenu = {
+  type: 'dialog',
+  open: { state: 'board_menu_open' },
+  title: '보드',
+  close_label: '닫기',
+  child: {
+    type: 'stack', direction: 'column', gap: 'small',
+    children: [
+      rowBtn('plus', '새 보드', c('board_new')),
+      rowBtn('pencil', '이름 바꾸기', [closeMenu, { set_state: 'rename_open', value: true }]),
+      // 배경색은 메뉴 안에서 바로 고른다. 값이 없으면 테마 바탕을 보이고, [기본 배경]은 보드의 bg 키를 지운다.
+      { type: 'color', label: '배경색', value: c('board_bg'), on_change: c('set_board_bg') },
+      rowBtn('rotate-ccw', '기본 배경', c('reset_board_bg')),
+      rowBtn('trash-2', '보드 삭제', [closeMenu, { set_state: 'delete_open', value: true }]),
+    ],
+  },
+  on_close: [closeMenu],
+};
+
+// 보드 삭제 확인. 글에 보드 이름이 들어가 confirm(title은 고정 글) 대신 danger 대화상자를 쓴다.
+const deleteDialog = {
+  type: 'dialog',
+  open: { state: 'delete_open' },
+  title: '보드 삭제',
+  danger: true,
+  close_label: '삭제',
+  cancel_label: '취소',
+  child: { type: 'text', value: c('board_delete_text') },
+  on_confirm: c('board_delete'), // 핸들러가 delete_open을 끈다
+  on_close: [{ set_state: 'delete_open', value: false }],
 };
 
 const detail = {
@@ -337,6 +368,8 @@ const ui = {
       ],
     },
     renameDialog,
+    boardMenu,
+    deleteDialog,
   ],
 };
 
@@ -355,7 +388,7 @@ const app = {
     },
   ],
   state: {
-    draft: '', board_name: '', board: null, yt_embed: null, rename_open: false, group_name: '', theme: 'light',
+    draft: '', board_name: '', board: null, yt_embed: null, rename_open: false, board_menu_open: false, delete_open: false, group_name: '', theme: 'light',
     selected: null, view: null, mode: 'manual', cmd: null, paste_inbox: null,
   },
   assets: ASSETS,
@@ -365,16 +398,13 @@ const app = {
     entry: { id: ASSET_ID, version: entry.version },
     outputs: Object.fromEntries(Object.entries(outputs).map(([k, v]) => [k, { default: v }])),
     actions,
-    state_keys: ['draft', 'board_name', 'yt_embed', 'rename_open', 'group_name', 'theme', ...BOARD_STATE],
+    state_keys: ['draft', 'board_name', 'yt_embed', 'rename_open', 'board_menu_open', 'delete_open', 'group_name', 'theme', ...BOARD_STATE],
     storage_entries: storageIds,
     http_permissions: ['yt-oembed', 'yt-thumb', 'pin-oembed', 'pin-img'],
     device_storage: { prefixes: ['orig/'] },
   },
   file_drop: {
-    accept: [
-      { mime: 'image/*', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'heic', 'heif'] },
-      { mime: 'video/mp4', extensions: ['mp4', 'm4v'] },
-    ],
+    accept: FILE_ACCEPT,
     multiple: true,
     client: 'drop',
   },

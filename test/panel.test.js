@@ -133,3 +133,19 @@ test('panelOutputs: 이름은 모든 카드, 메모 입력칸은 사진·영상�
   assert.equal(g.has_memo_input, false);
   assert.equal(g.sel_label, '');
 });
+
+test('boardOutputs: 지운 보드는 고르기에서 빼고, 삭제 확인 글에 지금 보드 이름을 넣는다', async () => {
+  const { boardOutputs, boardDeleteText } = await import('../src/panel.js');
+  const boards = [
+    { id: 'a', name: '여행' },
+    { id: 'gone', name: '옛 보드', deleted: true },
+    { id: 'b', name: '집' },
+  ];
+  const o = boardOutputs(boards, 'b');
+  assert.deepEqual(o.board_options, [{ value: 'a', label: '여행' }, { value: 'b', label: '집' }]);
+  assert.equal(o.board_label, '집');
+  assert.equal(o.board_delete_text, '「집」 보드를 지울까요? 카드도 함께 지워져요.');
+  assert.equal(boardDeleteText('여행'), '「여행」 보드를 지울까요? 카드도 함께 지워져요.');
+  assert.equal(boardOutputs(boards, 'gone').board_label, '');
+  assert.deepEqual(boardOutputs(null, null).board_options, []);
+});

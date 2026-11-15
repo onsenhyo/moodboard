@@ -16,7 +16,7 @@ import {
   normSelected, resolveSelected, deleteCardPatches, deleteGroupPatches, staleTombstones, viewCenter,
 } from './selection.js';
 import { createGate, retryRead, createSaver } from './startup.js';
-import { panelOutputs, MEMO_KINDS } from './panel.js';
+import { panelOutputs, MEMO_KINDS, boardOutputs } from './panel.js';
 import { createPreview } from './preview.js';
 import { loadBoardHtml, errorHtml } from './boardhtml.js';
 import { boardPartIds, exportAssetId } from './manifest.js';
@@ -231,9 +231,8 @@ function onSelectedState(value) {
 function publishBoards() {
   const bg = board()?.bg;
   p.publish({
-    board_options: liveBoards().map((b) => ({ value: b.id, label: b.name })),
+    ...boardOutputs(ed.doc.boards, boardId), // board_options(지운 보드 빼고), board_label, board_delete_text
     board: boardId,
-    board_label: board()?.name ?? '',
     // 툴바 [배경] color. 보드 bg가 없으면 지금 테마의 바탕을 보인다.
     board_bg: HEX.test(bg ?? '') ? bg : THEMES[themeKey].bg,
     has_board_bg: HEX.test(bg ?? ''),
@@ -528,6 +527,7 @@ p.handle('board_select', ({ event } = {}) => {
 });
 
 p.handle('board_new', () => {
+  p.setState('board_menu_open', false); // 보드 메뉴에서 눌렀다. 동작 목록에 client를 섞을 수 없어 여기서 닫는다
   const b = newBoard(`보드 ${liveBoards().length + 1}`);
   ed.edit({ kind: 'board', id: b.id, insert: b, t: b.updatedAt });
   boardId = b.id;
@@ -544,6 +544,20 @@ p.handle('board_rename', ({ event } = {}) => {
   p.setState('board_name', '');
   p.setState('rename_open', false); // 동작 목록에 client를 섞을 수 없어 대화상자는 여기서 닫는다
   publishBoards();
+  scheduleSave();
+  clearNotice();
+});
+
+// 지금 보드를 지운다. 보드 묘비(deleted, updatedAt)만 쓰고 카드는 그대로 둔다.
+// 카드의 썸네일과 원본은 7일 뒤 collectGarbage가 걷는다(staleTombstones). 남은 보드가 없으면 ensureBoard가 '내 보드'를 만든다.
+p.handle('board_delete', () => {
+  p.setState('delete_open', false);
+  const b = board();
+  if (!loaded || !b) return;
+  ed.edit({ kind: 'board', id: b.id, fields: { deleted: true } });
+  boardId = liveBoards()[0]?.id ?? null;
+  select();
+  refresh();
   scheduleSave();
   clearNotice();
 });
@@ -680,7 +694,7 @@ function updateLoading() {
 const onReadFail = () => { if (!retrying) { retrying = true; updateLoading(); } };
 
 async function start() {
-  p.publish({ export_info: '', has_export_info: false, board_options: [], board: null, board_label: '' });
+  p.publish({ export_info: '', has_export_info: false, board_options: [], board: null, board_label: '', board_delete_text: '' });
   publishPanel(null);
   publishNotice();
   publishMode();

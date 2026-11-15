@@ -61,6 +61,8 @@
     "board": null,
     "yt_embed": null,
     "rename_open": false,
+    "board_menu_open": false,
+    "delete_open": false,
     "group_name": "",
     "theme": "light",
     "selected": null,
@@ -2213,6 +2215,9 @@
       "group_count_label": {
         "default": ""
       },
+      "board_delete_text": {
+        "default": ""
+      },
       "board_bg": {
         "default": "#f7f3f7"
       },
@@ -2251,13 +2256,16 @@
       "set_text_paper",
       "reset_text_paper",
       "set_card_label",
-      "set_card_memo"
+      "set_card_memo",
+      "board_delete"
     ],
     "state_keys": [
       "draft",
       "board_name",
       "yt_embed",
       "rename_open",
+      "board_menu_open",
+      "delete_open",
       "group_name",
       "theme",
       "board",
@@ -2466,17 +2474,12 @@
           },
           {
             "type": "button",
-            "label": "새 보드",
-            "on_click": {
-              "client": "board_new"
-            }
-          },
-          {
-            "type": "button",
-            "label": "이름 바꾸기",
+            "label": "보드 메뉴",
+            "icon": "ellipsis",
+            "icon_only": true,
             "on_click": [
               {
-                "set_state": "rename_open",
+                "set_state": "board_menu_open",
                 "value": true
               }
             ]
@@ -2496,10 +2499,14 @@
             "on_submit": {
               "client": "add_text"
             }
-          },
+          }
+        ],
+        "end": [
           {
             "type": "button",
             "label": "파일 추가",
+            "icon": "upload",
+            "icon_only": true,
             "on_click": {
               "pick_files": {
                 "accept": [
@@ -2533,70 +2540,61 @@
           {
             "type": "button",
             "label": "묶음 추가",
+            "icon": "folder",
+            "icon_only": true,
             "on_click": {
               "client": "group_add"
             }
           },
           {
-            "type": "color",
-            "label": "배경",
-            "value": {
-              "client": "board_bg"
-            },
-            "on_change": {
-              "client": "set_board_bg"
-            }
-          },
-          {
-            "type": "button",
-            "label": "기본 배경",
-            "on_click": {
-              "client": "reset_board_bg"
-            }
-          }
-        ],
-        "end": [
-          {
             "type": "button",
             "label": "색으로 정렬",
+            "icon": "paint-bucket",
+            "icon_only": true,
+            "on_click": {
+              "client": "sort_color"
+            },
             "variant": "chip",
             "pressed": {
               "client": "sorted"
-            },
-            "on_click": {
-              "client": "sort_color"
             }
           },
           {
             "type": "button",
             "label": "내 배치",
+            "icon": "grid-2x2",
+            "icon_only": true,
+            "on_click": {
+              "client": "sort_manual"
+            },
             "variant": "chip",
             "pressed": {
               "client": "manual_mode"
-            },
-            "on_click": {
-              "client": "sort_manual"
             }
           },
           {
             "type": "button",
-            "label": "−",
-            "description": "축소",
+            "label": "축소",
+            "icon": "zoom-out",
+            "icon_only": true,
             "on_click": {
               "client": "zoom_out"
             }
           },
           {
             "type": "button",
-            "label": "+",
-            "description": "확대",
+            "label": "확대",
+            "icon": "zoom-in",
+            "icon_only": true,
             "on_click": {
               "client": "zoom_in"
             }
           },
           {
             "type": "button",
-            "label": "맞춤",
+            "label": "화면에 맞춤",
+            "icon": "maximize-2",
+            "icon_only": true,
             "on_click": {
               "client": "zoom_fit"
             }
@@ -2604,6 +2602,8 @@
           {
             "type": "button",
             "label": "내보내기",
+            "icon": "share",
+            "icon_only": true,
             "on_click": {
               "client": "export"
             }
@@ -3134,6 +3134,112 @@
           {
             "set_state": "board_name",
             "value": ""
+          }
+        ]
+      },
+      {
+        "type": "dialog",
+        "open": {
+          "state": "board_menu_open"
+        },
+        "title": "보드",
+        "close_label": "닫기",
+        "child": {
+          "type": "stack",
+          "direction": "column",
+          "gap": "small",
+          "children": [
+            {
+              "type": "button",
+              "variant": "row",
+              "icon": "plus",
+              "label": "새 보드",
+              "on_click": {
+                "client": "board_new"
+              }
+            },
+            {
+              "type": "button",
+              "variant": "row",
+              "icon": "pencil",
+              "label": "이름 바꾸기",
+              "on_click": [
+                {
+                  "set_state": "board_menu_open",
+                  "value": false
+                },
+                {
+                  "set_state": "rename_open",
+                  "value": true
+                }
+              ]
+            },
+            {
+              "type": "color",
+              "label": "배경색",
+              "value": {
+                "client": "board_bg"
+              },
+              "on_change": {
+                "client": "set_board_bg"
+              }
+            },
+            {
+              "type": "button",
+              "variant": "row",
+              "icon": "rotate-ccw",
+              "label": "기본 배경",
+              "on_click": {
+                "client": "reset_board_bg"
+              }
+            },
+            {
+              "type": "button",
+              "variant": "row",
+              "icon": "trash-2",
+              "label": "보드 삭제",
+              "on_click": [
+                {
+                  "set_state": "board_menu_open",
+                  "value": false
+                },
+                {
+                  "set_state": "delete_open",
+                  "value": true
+                }
+              ]
+            }
+          ]
+        },
+        "on_close": [
+          {
+            "set_state": "board_menu_open",
+            "value": false
+          }
+        ]
+      },
+      {
+        "type": "dialog",
+        "open": {
+          "state": "delete_open"
+        },
+        "title": "보드 삭제",
+        "danger": true,
+        "close_label": "삭제",
+        "cancel_label": "취소",
+        "child": {
+          "type": "text",
+          "value": {
+            "client": "board_delete_text"
+          }
+        },
+        "on_confirm": {
+          "client": "board_delete"
+        },
+        "on_close": [
+          {
+            "set_state": "delete_open",
+            "value": false
           }
         ]
       }

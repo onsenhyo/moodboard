@@ -89,3 +89,15 @@ export function panelOutputs(sel) {
     has_group_selected: false,
   };
 }
+
+// 보드 고르기와 보드 메뉴에 줄 값. 지운 보드(deleted)는 고르기에서 뺀다.
+export const boardDeleteText = (name) => `「${name ?? ''}」 보드를 지울까요? 카드도 함께 지워져요.`;
+export function boardOutputs(boards, boardId) {
+  const live = (Array.isArray(boards) ? boards : []).filter((b) => b && !b.deleted);
+  const cur = live.find((b) => b.id === boardId) ?? null;
+  return {
+    board_options: live.map((b) => ({ value: b.id, label: b.name })),
+    board_label: cur?.name ?? '',
+    board_delete_text: boardDeleteText(cur?.name),
+  };
+}
