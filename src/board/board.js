@@ -14,8 +14,9 @@
 import { reduce, initialState, zoomAt, fitView, sortCols, rectOf, visibleCards } from '../interaction.js';
 import { sortedLayout, SORT_CELL, SORT_GAP, toWorld, hitTest } from '../layout.js';
 import {
-  canCrop, normCrop, FULL_CROP, cropHandleAt, dragCrop, cropPatch, uncropPatch, isFull, createCropTracker,
+  canCrop, normCrop, FULL_CROP, cropHandleAt, dragCrop, cropApplyPatch, createCropTracker,
 } from '../crop.js';
+import { pasteValue } from '../dropxfer.js';
 import { createRenderer } from '../render.js';
 import { THEMES, themeName, boardTheme } from '../theme.js';
 import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore, isConflict } from '../store.js';
@@ -244,7 +245,8 @@ function enterCrop(id) {
   if (!canCrop(card)) return;
   if (ui.drag) onPointer({ phase: 'cancel', pointer_id: ui.drag.pointerId });
   const base = normCrop(card.crop) ?? { ...FULL_CROP };
-  crop = { id, base, rect: { ...base }, drag: null };
+  // size: 지금 썸네일 크기. 자르기 동안 비트맵 캐시가 비워져도 적용할 수 있게 잡아 둔다.
+  crop = { id, base, rect: { ...base }, drag: null, size: renderer.thumbSize(id) };
   select({ kind: 'card', id });
   focusPasteBox();
   renderer.redraw();
@@ -261,14 +263,8 @@ function applyCrop() {
   crop = null;
   canvas.style.cursor = '';
   const card = c && cardById(c.id);
-  const size = card && renderer.thumbSize(card.id);
-  if (!card || !size) { renderer.redraw(); return; }
-  const before = normCrop(card.crop);
-  const next = normCrop(c.rect);
-  if (!next && !before) { renderer.redraw(); return; }
-  const patch = isFull(c.rect)
-    ? uncropPatch(board().id, card, size.width, size.height)
-    : cropPatch(board().id, card, c.rect, size.width, size.height);
+  const patch = card && cropApplyPatch(board().id, card, c, renderer.thumbSize(card.id));
+  if (!patch) { renderer.redraw(); return; }
   ed.edit(patch);
   refresh(false);
   save();
@@ -283,6 +279,8 @@ const inside = (p, r) => p.x >= r.x && p.y >= r.y && p.x <= r.x + r.w && p.y <= 
 function cropDown(e) {
   const lay = renderer.cropLayout();
   if (!lay) return;
+  // 열 때 썸네일이 아직 없었으면 그려진 지금 크기를 잡아 둔다.
+  if (!crop.size) crop.size = renderer.thumbSize(crop.id);
   const p = localPx(e);
   const handle = cropHandleOf(lay, p);
   if (handle) {
@@ -460,7 +458,10 @@ document.addEventListener('paste', (e) => {
   e.preventDefault();
   pasteBox.value = '';
   if (!text.trim()) return;
-  k.setState('paste_inbox', { text, n: Date.now() });
+  // 창 상태 전체가 64KiB를 넘으면 쓰기 전체가 거부되므로 미리 본다(dropxfer.js pasteValue).
+  const v = pasteValue(k.getState(), text, Date.now());
+  if (!v) { showToast('글이 너무 길어 붙여 넣지 못했어요. 나눠서 붙여 넣어 주세요'); return; }
+  k.setState('paste_inbox', v);
 });
 
 // --- 끌어 놓기 (Finder에서 보드 위로, drop.js) ---

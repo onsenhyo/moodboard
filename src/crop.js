@@ -62,6 +62,19 @@ export function uncropPatch(boardId, card, tw, th) {
   return { kind: 'card', boardId, id: card.id, fields: { manual: manualWithHeight(card, null, tw, th) }, deleteKeys: ['crop'] };
 }
 
+// 자르기 화면을 닫으며 쓸 패치(바뀐 것이 없거나 크기를 모르면 null).
+// c = {rect, size?}: size는 자르기 화면을 열 때 잡아 둔 썸네일 크기 {width, height}. 그 사이 썸네일 비트맵 캐시가
+// 비워져도 적용되게 먼저 쓰고, 없을 때만 current(지금 크기)를 쓴다.
+export function cropApplyPatch(boardId, card, c, current) {
+  if (!card || !c) return null;
+  const size = c.size ?? current;
+  if (!size || !(size.width > 0) || !(size.height > 0)) return null;
+  if (!normCrop(c.rect) && !normCrop(card.crop)) return null;
+  return isFull(c.rect)
+    ? uncropPatch(boardId, card, size.width, size.height)
+    : cropPatch(boardId, card, c.rect, size.width, size.height);
+}
+
 export function cropImageRect(inner, base, tw, th) {
   const { sx, sy, sw, sh } = cropSourceRect(base, tw, th);
   const k = Math.max(inner.w / sw, inner.h / sh);

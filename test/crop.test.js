@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canCrop, normCrop, isFull, cropSourceRect, cropHeight, cropPatch, uncropPatch, cropImageRect,
-  cropHandleAt, dragCrop, createCropTracker, CROP_MIN, FULL_CROP,
+  cropHandleAt, dragCrop, createCropTracker, cropApplyPatch, CROP_MIN, FULL_CROP,
 } from '../src/crop.js';
 import { applyPatches } from '../src/patches.js';
 
@@ -129,4 +129,21 @@ test('photoSource: 정지 썸네일과 GIF 프레임 모두 card.crop 비율로 
   assert.deepEqual(photoSource({ crop }, { width: 200, height: 100 }), { sx: 50, sy: 10, sw: 100, sh: 80 });
   assert.deepEqual(photoSource({ anim: true, crop }, { displayWidth: 400, displayHeight: 200 }), { sx: 100, sy: 20, sw: 200, sh: 160 });
   assert.deepEqual(photoSource({ anim: true }, { displayWidth: 40, displayHeight: 30 }), { sx: 0, sy: 0, sw: 40, sh: 30 });
+});
+
+test('cropApplyPatch: 들어올 때 잡아 둔 썸네일 크기로 적용한다(그 사이 비트맵 캐시가 비어도)', () => {
+  const card = { id: 'c', kind: 'image', hasThumb: true, manual: { x: 10, y: 20, w: 240, h: 180 } };
+  const rect = { x: 0, y: 0, w: 0.5, h: 1 };
+  const c = { id: 'c', base: { ...FULL_CROP }, rect, size: { width: 640, height: 480 } };
+  assert.deepEqual(cropApplyPatch('b', card, c, null), cropPatch('b', card, rect, 640, 480));
+  // 잡아 둔 크기가 없으면 지금 크기를 쓴다
+  assert.deepEqual(cropApplyPatch('b', card, { ...c, size: null }, { width: 640, height: 480 }), cropPatch('b', card, rect, 640, 480));
+  // 둘 다 없으면 높이를 맞출 수 없으므로 적용하지 않는다
+  assert.equal(cropApplyPatch('b', card, { ...c, size: null }, null), null);
+  // 바뀐 것이 없으면(전체 → 전체) 없음
+  assert.equal(cropApplyPatch('b', card, { ...c, rect: { ...FULL_CROP } }, null), null);
+  // 전체로 되돌리면 해제
+  const cropped = { ...card, crop: { x: 0, y: 0, w: 0.5, h: 1 } };
+  assert.deepEqual(cropApplyPatch('b', cropped, { ...c, rect: { ...FULL_CROP } }, null).deleteKeys, ['crop']);
+  assert.equal(cropApplyPatch('b', null, c, null), null);
 });

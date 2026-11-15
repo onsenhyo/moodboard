@@ -6,7 +6,10 @@
 // 그래서 sandbox가 File을 읽어 조각으로 나눠 창 상태 drop_inbox에 쓰고, client가 drop_ack로 받았다고 알린다.
 //
 // 한도: 창 상태 전체(선언한 모든 키의 JSON)가 64KiB(WINDOW_STATE_MAX_BYTES, crates/contract/src/lib.rs)를 넘으면
-// 패치 전체가 거부된다. 조각은 원본 24KiB(base64 32,768자)로 다른 키(paste_inbox 글 등)에 자리를 남긴다.
+// 패치 전체가 거부된다. sandbox는 자기 state_keys만 보므로(draft, board_name, group_name, yt_embed, theme 등은
+// 못 본다) 보이는 키만 센 값은 실제보다 작다. 그래서 조각은 원본 16KiB(base64 21,848자)로 작게 두고, 보이는 키와
+// 조각을 합쳐 SANDBOX_STATE_LIMIT(64KiB − 16KiB) 안일 때만 쓴다. 못 보는 키에는 16KiB 넘게 남는다.
+// 보내는 쪽은 조각마다 File.slice로 그 범위만 읽어 base64로 바꾼다(streamMessages). 메모리는 조각 하나로 묶인다.
 // 조각마다 core 쓰기와 동기화가 두 번(조각, 받음) 돌므로 한 파일은 DROP_MAX_BYTES까지만 옮긴다.
 //
 // drop_inbox = {batch, seq, attempt, index, total, name, mime, size, part, parts, b64, x, y, reduced}
@@ -17,10 +20,13 @@
 
 export const DROP_STATE = 'drop_inbox';
 export const DROP_ACK = 'drop_ack';
-export const CHUNK_BYTES = 24 * 1024;
+export const CHUNK_BYTES = 16 * 1024;
 export const CHUNK_B64_MAX = Math.ceil(CHUNK_BYTES / 3) * 4;
 export const DROP_MAX_BYTES = 8 * 1024 * 1024;
 export const WINDOW_STATE_MAX_BYTES = 64 * 1024;
+// sandbox가 보는 키만으로 셀 때의 한도. 못 보는 키(client가 쓰는 draft 등)에 STATE_RESERVE를 남긴다.
+export const STATE_RESERVE = 16 * 1024;
+export const SANDBOX_STATE_LIMIT = WINDOW_STATE_MAX_BYTES - STATE_RESERVE;
 const CASCADE_PX = 24;
 const CARD_W = 240;
 const CARD_H = 180;
@@ -85,26 +91,72 @@ export function chunkRanges(size, chunk = CHUNK_BYTES) {
   return out;
 }
 
-// files = [{name, mime, size, bytes(Uint8Array), reduced?}] -> 보낼 drop_inbox 값의 목록(attempt 0).
-export function chunkMessages(batch, files, at, chunk = CHUNK_BYTES) {
+// files = [{name, mime, size, reduced?}] -> 조각마다 b64를 뺀 drop_inbox 값과 읽을 범위 [{...msg, start, end}].
+export function chunkPlan(batch, files, at, chunk = CHUNK_BYTES) {
   const out = [];
   let seq = 0;
   files.forEach((f, index) => {
-    const ranges = chunkRanges(f.bytes.length, chunk);
+    const size = Math.max(0, f.size | 0);
+    const ranges = chunkRanges(size, chunk);
     for (const r of ranges) {
       out.push({
         batch, seq: seq++, attempt: 0, index, total: files.length,
-        name: f.name, mime: f.mime, size: f.bytes.length, part: r.part, parts: ranges.length,
-        b64: bytesToB64(f.bytes.subarray(r.start, r.end)), x: at.x, y: at.y, reduced: !!f.reduced,
+        name: f.name, mime: f.mime, size, part: r.part, parts: ranges.length,
+        x: at.x, y: at.y, reduced: !!f.reduced, start: r.start, end: r.end,
       });
     }
   });
   return out;
 }
 
+const toMessage = ({ start, end, ...h }, bytes) => {
+  const { x, y, reduced, ...head } = h;
+  return { ...head, b64: bytesToB64(bytes), x, y, reduced };
+};
+
+// 보낼 drop_inbox 값을 하나씩 낸다. 다음 값을 달라고 할 때 그 조각만 읽는다.
+// read(file, start, end) -> Promise<Uint8Array>(브라우저에서는 file.slice(start, end).arrayBuffer()).
+export async function* streamMessages(batch, files, at, read, chunk = CHUNK_BYTES) {
+  for (const h of chunkPlan(batch, files, at, chunk)) {
+    const raw = await read(files[h.index], h.start, h.end);
+    const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+    if (bytes.length !== h.end - h.start) throw Object.assign(new Error('read'), { code: 'read' });
+    yield toMessage(h, bytes);
+  }
+}
+
+// files = [{name, mime, bytes(Uint8Array), reduced?}] -> 보낼 drop_inbox 값의 목록(attempt 0). 시험과 작은 값용.
+export function chunkMessages(batch, files, at, chunk = CHUNK_BYTES) {
+  const sized = files.map((f) => ({ ...f, size: f.bytes.length }));
+  return chunkPlan(batch, sized, at, chunk).map((h) => toMessage(h, files[h.index].bytes.subarray(h.start, h.end)));
+}
+
 // 다른 키와 합친 창 상태가 한도 안인가(쓰기 전에 sandbox가 본다).
 export function stateFits(state, limit = WINDOW_STATE_MAX_BYTES) {
   return new TextEncoder().encode(JSON.stringify(state)).length <= limit;
+}
+
+// 붙여 넣은 글을 paste_inbox에 쓸 값. 보이는 창 상태(state, 옛 paste_inbox는 바뀌므로 뺀다)와 합쳐
+// SANDBOX_STATE_LIMIT를 넘으면 null(쓰면 패치 전체가 거부된다).
+export function pasteValue(state, text, n, limit = SANDBOX_STATE_LIMIT) {
+  const value = { text, n };
+  return stateFits({ ...(state ?? {}), paste_inbox: value }, limit) ? value : null;
+}
+
+// 보내는 중이 아닌데 drop_inbox에 값이 남아 있는가(창이 옮기는 도중에 닫혀 비우기를 못 한 경우).
+export function leftoverInbox(value, busy) {
+  return value != null && !busy;
+}
+
+// 옮기기가 실패했을 때 보일 글. code: state_full | timeout | read | 받는 쪽 거부 코드.
+export function dropErrorText(code) {
+  if (code === 'state_full') return '창 상태가 가득 차 파일을 옮기지 못했어요. 긴 글을 줄이거나 파일 추가 단추를 써 주세요';
+  if (code === 'timeout') {
+    return '파일을 옮기지 못했어요. 받았다는 응답이 없어요(창 상태가 가득 찼을 수 있어요). '
+      + '다시 끌어 놓거나 파일 추가 단추를 써 주세요';
+  }
+  if (code === 'read') return '파일을 읽지 못했어요(옮기는 동안 바뀌었을 수 있어요). 다시 끌어 놓아 주세요';
+  return '파일을 옮기지 못했어요. 파일 추가 단추를 써 주세요';
 }
 
 // --- 받는 쪽 ---
