@@ -81,7 +81,7 @@
     },
     {
       "id": "moodboard-manifest",
-      "version": 1
+      "version": 2
     },
     {
       "id": "moodboard-client-1",
@@ -101,7 +101,7 @@
     },
     {
       "id": "moodboard-export",
-      "version": 2
+      "version": 3
     }
   ],
   "storage": {
