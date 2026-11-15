@@ -13,6 +13,7 @@
 
 import { liveGroups, effectiveGroupId } from './model.js';
 import { isHex } from './theme.js';
+import { normCrop } from './crop.js';
 
 export const WARN_BYTES = 50_000_000;
 export const BLOCK_BYTES = 95_000_000;
@@ -107,6 +108,9 @@ function viewerCard(board, c, embedded) {
   if (typeof c.label === 'string' && c.label) out.label = c.label;
   if (typeof c.memo === 'string' && c.memo) out.memo = c.memo;
   if (c.kind === 'text' && isHex(c.paper)) out.paper = c.paper;
+  // 자른 사진은 뷰어가 crop 사각형만 그린다.
+  const crop = c.hasThumb ? normCrop(c.crop) : null;
+  if (crop) out.crop = crop;
   if (c.kind === 'video') out.video = embedded.has(c.id);
   return out;
 }

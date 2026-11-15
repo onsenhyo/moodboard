@@ -2,7 +2,7 @@
 // 보드 그리기와 조작은 sandbox(board/board.js)가 맡는다. client는 넣기, 링크, blobs, 옆 칸, 내보내기,
 // 보드 관리를 맡고, 창 상태로 sandbox와 주고받는다.
 // - 읽기: selected {kind, id}|null, view {cx, cy, scale}, paste_inbox {text, n}
-// - 쓰기: board(지금 보드 id), mode, cmd {op, n}, selected(묶음 추가와 지우기)
+// - 쓰기: board(지금 보드 id), mode, cmd {op, n}, selected(묶음 추가와 지우기), crop_target {id, n}(옆 칸 [자르기])
 
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
@@ -17,6 +17,7 @@ import {
 } from './selection.js';
 import { createGate, retryRead, createSaver } from './startup.js';
 import { panelOutputs, MEMO_KINDS } from './panel.js';
+import { canCrop, normCrop, uncropPatch } from './crop.js';
 import { createPreview } from './preview.js';
 import { loadBoardHtml, errorHtml } from './boardhtml.js';
 import { boardPartIds, exportAssetId } from './manifest.js';
@@ -196,6 +197,8 @@ async function publishSelected() {
     thumbDataUrl: b64 ? `data:image/jpeg;base64,${b64}` : null,
     includeVideo: !!c.includeVideo,
     note: c.note ?? null,
+    canCrop: canCrop(c),
+    hasCrop: !!normCrop(c.crop),
   };
   if (c.kind === 'youtube') {
     const id = youtubeId(c.url);
@@ -502,6 +505,43 @@ function setCardText(field, event, max) {
 
 p.handle('set_card_label', ({ event } = {}) => setCardText('label', event));
 p.handle('set_card_memo', ({ event } = {}) => setCardText('memo', event, MEMO_MAX));
+
+// [자르기]: 보드(sandbox)가 crop_target의 n이 바뀌면 그 카드의 자르기 화면을 연다.
+p.handle('crop_start', () => {
+  const c = cardById(selectedId);
+  if (!canCrop(c)) return;
+  p.setState('crop_target', { id: c.id, n: Date.now() });
+  clearNotice();
+});
+
+// 썸네일을 디코드해 크기를 잰다. 못 재면 null(카드 높이는 그대로 둔다).
+async function thumbSize(id) {
+  try {
+    const b64 = thumbs ? await thumbs.get(id) : null;
+    if (!b64) return null;
+    const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+    const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+    const size = { width: bmp.width, height: bmp.height };
+    bmp.close?.();
+    return size;
+  } catch {
+    return null;
+  }
+}
+
+// [자르기 해제]: crop을 지우고 카드 높이를 원본 비율로 되돌린다(폭은 그대로).
+p.handle('crop_clear', async () => {
+  const c = cardById(selectedId);
+  if (!c || !('crop' in c)) return;
+  const size = await thumbSize(c.id);
+  const now = cardById(c.id);
+  if (!now || !('crop' in now)) return;
+  ed.edit(uncropPatch(boardId, now, size?.width, size?.height));
+  refresh();
+  scheduleSave();
+  publishSelected();
+  clearNotice();
+});
 
 p.handle('toggle_include_video', async ({ event } = {}) => {
   const c = cardById(selectedId);

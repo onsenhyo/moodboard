@@ -133,3 +133,11 @@ test('panelOutputs: 이름은 모든 카드, 메모 입력칸은 사진·영상�
   assert.equal(g.has_memo_input, false);
   assert.equal(g.sel_label, '');
 });
+
+test('panelOutputs: 자르기 단추는 사진 카드에, 해제는 자른 카드에', () => {
+  assert.equal(panelOutputs({ kind: 'image', canCrop: true }).can_crop, true);
+  assert.equal(panelOutputs({ kind: 'image', canCrop: true }).has_crop, false);
+  assert.equal(panelOutputs({ kind: 'youtube', canCrop: true, hasCrop: true }).has_crop, true);
+  assert.equal(panelOutputs({ kind: 'text', canCrop: false, hasCrop: true }).has_crop, false);
+  assert.equal(panelOutputs(null).can_crop, false);
+});
