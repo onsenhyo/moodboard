@@ -113,3 +113,162 @@ test('zoomAt은 기준점을 고정하고 fitView는 모든 카드를 담는다'
   const f = fitView([{ x: 0, y: 0, w: 1000, h: 500 }], SIZE, 0);
   assert.deepEqual(f, { x: 0, y: 0, scale: 1 });
 });
+
+import { visibleCards } from '../src/interaction.js';
+
+const grp = (id, x, y, w = 400, h = 300, over = {}) => ({ id, name: id, rect: { x, y, w, h }, collapsed: false, updatedAt: 1, ...over });
+const member = (id, x, y, groupId) => ({ ...card(id, x, y, 100, 80), groupId });
+
+// 묶음 g: (400,100)~(800,400). 제목줄 y 100~128, toggle x 400~424, resize (788,388)~.
+function gbase(over = {}) {
+  return base({
+    groups: [grp('g', 400, 100)],
+    cards: [card('a', 100, 100), member('m1', 450, 200, 'g'), member('m2', 600, 250, 'g')],
+    ...over,
+  });
+}
+
+test('initialState.groups는 빈 배열', () => {
+  assert.deepEqual(initialState().groups, []);
+});
+
+test('제목줄을 끌면 group_moved, 멤버만 같은 dx·dy', () => {
+  const { state, effects } = run(gbase(), [ev('down', 500, 110), ev('move', 530, 120), ev('move', 550, 150), ev('up', 550, 150)]);
+  assert.deepEqual(effects, [{
+    type: 'group_moved', groupId: 'g', rect: { x: 450, y: 140, w: 400, h: 300 },
+    cards: [
+      { cardId: 'm1', rect: { x: 500, y: 240, w: 100, h: 80 } },
+      { cardId: 'm2', rect: { x: 650, y: 290, w: 100, h: 80 } },
+    ],
+  }]);
+  assert.equal(state.drag, null);
+});
+
+test('제목줄 끄는 동안 drag.rect와 drag.cards가 따라온다', () => {
+  let s = reduce(gbase(), ev('down', 500, 110)).state;
+  const r = reduce(s, ev('move', 520, 110));
+  assert.deepEqual(r.effects, []);
+  assert.deepEqual(r.state.drag.rect, { x: 420, y: 100, w: 400, h: 300 });
+  assert.deepEqual(r.state.drag.cards, [
+    { cardId: 'm1', rect: { x: 470, y: 200, w: 100, h: 80 } },
+    { cardId: 'm2', rect: { x: 620, y: 250, w: 100, h: 80 } },
+  ]);
+});
+
+test('배율 2에서 제목줄 끌기는 dx/scale만큼', () => {
+  const s1 = gbase({ view: { x: 400, y: 100, scale: 2 } });
+  // 화면 (200,10) → 월드 (500,105): 제목줄(14 월드 단위)
+  const { effects } = run(s1, [ev('down', 200, 10), ev('move', 240, 30), ev('up', 240, 30)]);
+  assert.equal(effects[0].type, 'group_moved');
+  assert.deepEqual(effects[0].rect, { x: 420, y: 110, w: 400, h: 300 });
+});
+
+test('접힌 묶음의 멤버도 함께 옮긴다', () => {
+  const s0 = gbase({ groups: [grp('g', 400, 100, 400, 300, { collapsed: true })] });
+  const { effects } = run(s0, [ev('down', 500, 110), ev('move', 510, 110), ev('up', 510, 110)]);
+  assert.deepEqual(effects[0].cards.map(c => c.cardId), ['m1', 'm2']);
+  assert.deepEqual(effects[0].cards[0].rect, { x: 460, y: 200, w: 100, h: 80 });
+});
+
+test('모서리를 끌면 group_resized, 최소 160×100', () => {
+  const big = run(gbase(), [ev('down', 795, 395), ev('move', 845, 425), ev('up', 845, 425)]);
+  assert.deepEqual(big.effects, [{ type: 'group_resized', groupId: 'g', rect: { x: 400, y: 100, w: 450, h: 330 } }]);
+  const small = run(gbase(), [ev('down', 795, 395), ev('move', 0, 0), ev('up', 0, 0)]);
+  assert.deepEqual(small.effects, [{ type: 'group_resized', groupId: 'g', rect: { x: 400, y: 100, w: 160, h: 100 } }]);
+});
+
+test('toggle을 클릭하면 group_toggled', () => {
+  const { effects } = run(gbase(), [ev('down', 410, 110), ev('up', 411, 111)]);
+  assert.deepEqual(effects, [{ type: 'group_toggled', groupId: 'g' }]);
+});
+
+test('묶음 제목줄·몸통 클릭은 select {groupId}', () => {
+  const title = run(gbase(), [ev('down', 700, 110), ev('up', 700, 110)]);
+  assert.deepEqual(title.effects, [{ type: 'select', cardId: null, groupId: 'g' }]);
+  const body = run(gbase(), [ev('down', 700, 350), ev('up', 700, 350)]);
+  assert.deepEqual(body.effects, [{ type: 'select', cardId: null, groupId: 'g' }]);
+});
+
+test('묶음 몸통을 끌면 pan', () => {
+  const s0 = gbase();
+  const { state, effects } = run(s0, [ev('down', 700, 350), ev('move', 680, 340), ev('up', 680, 340)]);
+  assert.deepEqual(effects, []);
+  assert.deepEqual(state.view, { x: 20, y: 10, scale: 1 });
+  assert.deepEqual(state.groups, s0.groups);
+});
+
+test('묶음 안의 카드가 묶음보다 먼저 맞는다', () => {
+  const { effects } = run(gbase(), [ev('down', 470, 220), ev('up', 470, 220)]);
+  assert.deepEqual(effects, [{ type: 'select', cardId: 'm1' }]);
+});
+
+test('카드를 묶음 안에 놓으면 membership {groupId}', () => {
+  // 카드 a (100,100,200,100)를 +400,+100 → (500,200), 중심 (600,250)
+  const { effects } = run(gbase(), [ev('down', 150, 150), ev('move', 550, 250), ev('up', 550, 250)]);
+  assert.deepEqual(effects, [
+    { type: 'moved', cardId: 'a', rect: { x: 500, y: 200, w: 200, h: 100 } },
+    { type: 'membership', cardId: 'a', groupId: 'g' },
+  ]);
+});
+
+test('카드를 묶음 밖에 놓으면 membership {groupId:null}', () => {
+  // m1 (450,200,100,80)을 -400 → (50,200), 중심 (100,240)
+  const { effects } = run(gbase(), [ev('down', 470, 220), ev('move', 70, 220), ev('up', 70, 220)]);
+  assert.deepEqual(effects, [
+    { type: 'moved', cardId: 'm1', rect: { x: 50, y: 200, w: 100, h: 80 } },
+    { type: 'membership', cardId: 'm1', groupId: null },
+  ]);
+});
+
+test('같은 묶음 안에서 옮기면 membership 없음', () => {
+  const { effects } = run(gbase(), [ev('down', 470, 220), ev('move', 490, 230), ev('up', 490, 230)]);
+  assert.deepEqual(effects, [{ type: 'moved', cardId: 'm1', rect: { x: 470, y: 210, w: 100, h: 80 } }]);
+});
+
+test('크기 조절로 중심이 묶음에 들어가도 membership', () => {
+  // 카드 a (100,100,200,100), 모서리를 +500,+200 → w 700, h 300, 중심 (450,250)
+  const { effects } = run(gbase(), [ev('down', 295, 195), ev('move', 795, 395), ev('up', 795, 395)]);
+  assert.deepEqual(effects[1], { type: 'membership', cardId: 'a', groupId: 'g' });
+});
+
+test('겹친 묶음: 배열 끝 묶음의 id', () => {
+  const s0 = gbase({ groups: [grp('g', 400, 100), grp('h', 500, 150, 400, 300)] });
+  // 카드 a 중심을 (600,250)으로
+  const { effects } = run(s0, [ev('down', 150, 150), ev('move', 550, 250), ev('up', 550, 250)]);
+  assert.deepEqual(effects[1], { type: 'membership', cardId: 'a', groupId: 'h' });
+  const s1 = gbase({ groups: [grp('h', 500, 150, 400, 300), grp('g', 400, 100)] });
+  const r1 = run(s1, [ev('down', 150, 150), ev('move', 550, 250), ev('up', 550, 250)]);
+  assert.deepEqual(r1.effects[1], { type: 'membership', cardId: 'a', groupId: 'g' });
+});
+
+test('hitTest 접힌 묶음: 안의 카드는 맞지 않고 visibleCards에도 없다', () => {
+  const s0 = gbase({ groups: [grp('g', 400, 100, 400, 300, { collapsed: true })] });
+  assert.deepEqual(visibleCards(s0).map(c => c.id), ['a']);
+  const { effects } = run(s0, [ev('down', 470, 220), ev('up', 470, 220)]);
+  assert.deepEqual(effects, [{ type: 'select', cardId: null }]);
+  // 펼친 묶음이면 모두 보인다
+  assert.deepEqual(visibleCards(gbase()).map(c => c.id), ['a', 'm1', 'm2']);
+});
+
+test('visibleCards: 정렬 모드에서는 모두, 지운 묶음은 없는 것으로', () => {
+  const collapsed = [grp('g', 400, 100, 400, 300, { collapsed: true })];
+  assert.equal(visibleCards(gbase({ groups: collapsed, mode: 'sorted', sorted: new Map() })).length, 3);
+  const gone = [grp('g', 400, 100, 400, 300, { collapsed: true, deleted: true })];
+  assert.equal(visibleCards(gbase({ groups: gone })).length, 3);
+});
+
+test('정렬 중 묶음 끌기: group_moved 없고 notice, 묶음 자리는 맞지 않는다', () => {
+  // 정렬 배치에서 m1이 묶음 제목줄 자리(500,110)에 있다.
+  const sorted = new Map([['a', { x: 0, y: 0, w: 100, h: 100 }], ['m1', { x: 450, y: 100, w: 100, h: 100 }], ['m2', { x: 600, y: 300, w: 100, h: 100 }]]);
+  const s0 = gbase({ mode: 'sorted', sorted });
+  const onCard = run(s0, [ev('down', 500, 110), ev('move', 550, 150), ev('up', 550, 150)]);
+  assert.deepEqual(onCard.effects, [{ type: 'notice', text: '내 배치로 바꾸면 옮길 수 있어요' }]);
+  assert.ok(!onCard.effects.some(e => e.type === 'group_moved'));
+  // 카드가 없는 제목줄 자리: 묶음이 숨었으므로 pan
+  const onTitle = run(s0, [ev('down', 700, 110), ev('move', 750, 150), ev('up', 750, 150)]);
+  assert.deepEqual(onTitle.effects, []);
+  assert.deepEqual(onTitle.state.view, { x: -50, y: -40, scale: 1 });
+  // 모서리·toggle 클릭도 묶음에 닿지 않는다
+  const toggle = run(s0, [ev('down', 410, 110), ev('up', 410, 110)]);
+  assert.deepEqual(toggle.effects, [{ type: 'select', cardId: null }]);
+});

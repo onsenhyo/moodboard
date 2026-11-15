@@ -73,3 +73,56 @@ test('hitTest: 오른쪽 아래 12px는 resize, scale로 나눈다', () => {
   // scale 0.5: 구역은 24 월드 단위
   assert.equal(hitTest([a], rectOf, { x: 80, y: 80 }, 0.5).zone, 'resize');
 });
+
+import { hitTestGroup, memberOf } from '../src/layout.js';
+
+const grp = (id, x, y, w = 400, h = 300, over = {}) => ({ id, name: id, rect: { x, y, w, h }, collapsed: false, updatedAt: 1, ...over });
+
+test('hitTestGroup: toggle, title, resize, body', () => {
+  const g = grp('g', 100, 100);
+  assert.deepEqual(hitTestGroup([g], { x: 110, y: 110 }), { group: g, zone: 'toggle' });
+  assert.deepEqual(hitTestGroup([g], { x: 130, y: 110 }), { group: g, zone: 'title' });
+  assert.deepEqual(hitTestGroup([g], { x: 300, y: 127 }), { group: g, zone: 'title' });
+  assert.deepEqual(hitTestGroup([g], { x: 300, y: 129 }), { group: g, zone: 'body' });
+  assert.deepEqual(hitTestGroup([g], { x: 495, y: 395 }), { group: g, zone: 'resize' });
+  assert.equal(hitTestGroup([g], { x: 50, y: 50 }), null);
+  assert.equal(hitTestGroup([g], { x: 501, y: 200 }), null);
+});
+
+test('hitTestGroup: 구역은 scale로 나눈다', () => {
+  const g = grp('g', 0, 0);
+  // scale 2: 제목줄 14, toggle 12, resize 6 월드 단위
+  assert.equal(hitTestGroup([g], { x: 11, y: 5 }, 2).zone, 'toggle');
+  assert.equal(hitTestGroup([g], { x: 13, y: 5 }, 2).zone, 'title');
+  assert.equal(hitTestGroup([g], { x: 50, y: 15 }, 2).zone, 'body');
+  assert.equal(hitTestGroup([g], { x: 393, y: 295 }, 2).zone, 'body');
+  assert.equal(hitTestGroup([g], { x: 395, y: 295 }, 2).zone, 'resize');
+  // scale 0.5: 제목줄 56
+  assert.equal(hitTestGroup([g], { x: 100, y: 50 }, 0.5).zone, 'title');
+});
+
+test('hitTestGroup: 겹치면 배열 끝, 접힌 묶음은 제목줄만, 지운 묶음은 없다', () => {
+  const a = grp('a', 0, 0), b = grp('b', 200, 200);
+  assert.equal(hitTestGroup([a, b], { x: 300, y: 250 }).group, b);
+  assert.equal(hitTestGroup([b, a], { x: 300, y: 250 }).group, a);
+  const c = grp('c', 0, 0, 400, 300, { collapsed: true });
+  assert.equal(hitTestGroup([c], { x: 100, y: 10 }).zone, 'title');
+  assert.equal(hitTestGroup([c], { x: 10, y: 10 }).zone, 'toggle');
+  assert.equal(hitTestGroup([c], { x: 100, y: 100 }), null);
+  assert.equal(hitTestGroup([c], { x: 395, y: 295 }), null);
+  const d = grp('d', 0, 0, 400, 300, { deleted: true });
+  assert.equal(hitTestGroup([d], { x: 100, y: 100 }), null);
+  assert.equal(hitTestGroup([a, d], { x: 100, y: 100 }).group, a);
+});
+
+test('memberOf: 카드 중심, 배열 끝, 접힌·지운 묶음 제외', () => {
+  const a = grp('a', 0, 0), b = grp('b', 200, 200);
+  assert.equal(memberOf([a, b], { x: 50, y: 50, w: 100, h: 100 }), 'a');
+  assert.equal(memberOf([a, b], { x: 250, y: 220, w: 100, h: 100 }), 'b');
+  assert.equal(memberOf([b, a], { x: 250, y: 220, w: 100, h: 100 }), 'a');
+  // 걸쳐 있어도 중심이 밖이면 null
+  assert.equal(memberOf([a], { x: 350, y: 0, w: 200, h: 100 }), null);
+  assert.equal(memberOf([], { x: 0, y: 0, w: 10, h: 10 }), null);
+  assert.equal(memberOf([a, { ...b, collapsed: true }], { x: 250, y: 220, w: 100, h: 100 }), 'a');
+  assert.equal(memberOf([a, { ...b, deleted: true }], { x: 250, y: 220, w: 100, h: 100 }), 'a');
+});
