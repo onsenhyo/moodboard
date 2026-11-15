@@ -13,8 +13,12 @@ const ASSET_ID = 'moodboard'; // 진입 로더
 const SHARDS = 128; // src/main.js와 src/board/board.js의 SHARDS와 같아야 한다.
 const GIF_SHARDS = 32; // src/store.js의 GIF_STORE와 같아야 한다.
 
+// 앱 아이콘(assets/icon.svg, svg 자산). 빌드 산출물이 아니라 dist/assets.json에 없으므로 여기서 더한다.
+// 그림을 바꾸면 판을 1 올린다.
+const ICON = { id: 'moodboard-icon', version: 1, format: 'svg', file: 'assets/icon.svg' };
+
 const built = JSON.parse(readFileSync(join(ROOT, 'dist', 'assets.json'), 'utf8'));
-const ASSETS = built.map((a) => ({ id: a.id, version: a.version }));
+const ASSETS = [...built.map((a) => ({ id: a.id, version: a.version })), { id: ICON.id, version: ICON.version }];
 for (const a of ASSETS) {
   if (!Number.isInteger(a.version) || a.version < 1) throw new Error(`${a.id}: 자산 판은 1 이상의 정수`);
 }
@@ -407,6 +411,7 @@ const app = {
   id: 'moodboard',
   name: '무드보드',
   description: '이미지, 영상, 링크, 글을 한 판에 모으고 색으로 정렬합니다.',
+  icon: { asset: ICON.id, version: ICON.version },
   requires: { blocks: 52, modules: { assets: 1, client: 7, http: 2, storage: 1, web: 1 } },
   permissions: [
     { module: 'http', id: 'yt-oembed', label: '유튜브 정보', base_url: 'https://www.youtube.com', paths: ['/oembed'] },
