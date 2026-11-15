@@ -146,12 +146,16 @@ const outputs = {
   sel_text: '',
   sel_color: '#9e9e9e',
   sel_openable: false,
+  // 2차 Task 4: 묶음 선택(src/panel.js. 합치기 전에는 main.js의 SHIM이 채운다)
+  group_selected: null, // {id, name, count}|null
+  has_group_selected: false,
+  group_count_label: '', // 옆 칸 'N장'. 블록은 group_selected.count를 읽지 못해 main.js가 따로 낸다
 };
 
 const actions = [
   'drop', 'pick', 'add_text', 'sort_color', 'sort_manual', 'zoom_in', 'zoom_out', 'zoom_fit', 'pointer',
   'delete_selected', 'set_text_color', 'set_text', 'toggle_include_video', 'board_select', 'board_new',
-  'board_rename', 'export',
+  'board_rename', 'export', 'group_add', 'group_rename', 'group_delete',
 ];
 
 // --- 화면 ---
@@ -184,6 +188,7 @@ const toolbar = {
         },
       },
     },
+    { type: 'button', label: '묶음 추가', on_click: c('group_add') },
   ],
   end: [
     { type: 'button', label: '색으로 정렬', variant: 'chip', pressed: c('sorted'), on_click: c('sort_color') },
@@ -227,9 +232,26 @@ const detail = {
   ],
 };
 
+// 묶음을 골랐을 때 옆 칸. 이름은 Enter로 바꾼다.
+const groupDetail = {
+  type: 'stack', direction: 'column', gap: 'small',
+  children: [
+    {
+      type: 'input', label: '묶음 이름', label_position: 'top', placeholder: '묶음 이름을 넣고 Enter',
+      value: { state: 'group_name' }, commit: 'submit', on_change: { set_state: 'group_name' }, on_submit: c('group_rename'),
+    },
+    { type: 'text', style: 'meta', value: c('group_count_label') },
+    {
+      type: 'button', label: '묶음 삭제', variant: 'danger', on_click: c('group_delete'),
+      confirm: { title: '이 묶음을 지울까요? 안의 카드는 남아요', ok: '삭제' },
+    },
+  ],
+};
+
 const side = {
   type: 'stack', direction: 'column', gap: 'small',
   children: [
+    when('has_group_selected', groupDetail),
     when('sel_has', detail),
     when('sel_none', { type: 'text', style: 'meta', value: '카드를 누르면 여기에 자세히 보여요' }),
   ],
@@ -281,7 +303,7 @@ const app = {
       paths: ['/originals/', '/1200x/', '/736x/', '/564x/', '/474x/', '/236x/'],
     },
   ],
-  state: { draft: '', board_name: '', board: null, yt_embed: null, rename_open: false },
+  state: { draft: '', board_name: '', board: null, yt_embed: null, rename_open: false, group_name: '', theme: 'light' },
   assets: [{ id: ASSET_ID, version: ASSET_VERSION }],
   storage: { entries: [boardsEntry, ...thumbEntries] },
   client: {
@@ -289,7 +311,7 @@ const app = {
     entry: { id: ASSET_ID, version: ASSET_VERSION },
     outputs: Object.fromEntries(Object.entries(outputs).map(([k, v]) => [k, { default: v }])),
     actions,
-    state_keys: ['draft', 'board_name', 'board', 'yt_embed', 'rename_open'],
+    state_keys: ['draft', 'board_name', 'board', 'yt_embed', 'rename_open', 'group_name', 'theme'],
     storage_entries: storageIds,
     http_permissions: ['yt-oembed', 'yt-thumb', 'pin-oembed', 'pin-img'],
     device_storage: { prefixes: ['orig/'] },

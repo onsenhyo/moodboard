@@ -1,13 +1,14 @@
 // client 진입점. 플랫폼 핸들러를 순수 모듈과 render.js에 잇는다.
 
 import { createPlatform } from './platform/kaleidoscope.js';
-import { newBoard } from './model.js';
-import { sortedLayout, SORT_CELL, SORT_GAP } from './layout.js';
+import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
+import { sortedLayout, SORT_CELL, SORT_GAP, toWorld } from './layout.js';
 import { BOARDS_ENTRY, mergeBoards, saveWithRetry, shardIdOf, createThumbStore } from './store.js';
 import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
 import { reduce, initialState, placeNear, zoomAt, fitView, sortCols } from './interaction.js';
 import { createRenderer } from './render.js';
+import { THEMES, themeName } from './theme.js';
 import { createGate, retryRead, createSaver } from './startup.js';
 import { panelOutputs } from './panel.js';
 import { createPreview } from './preview.js';
@@ -34,6 +35,7 @@ let doc = { version: 1, boards: [] };
 let boardId = null;
 let ui = initialState();
 let selectedId = null;
+let selectedGroupId = null; // 선택한 묶음. selectedId와 함께 참이 되지 않는다
 let notice = null;
 let thumbs = null;
 let loaded = false; // boards를 한 번이라도 읽었는가
@@ -46,6 +48,9 @@ const liveBoards = () => doc.boards.filter((b) => !b.deleted);
 const board = () => liveBoards().find((b) => b.id === boardId) ?? null;
 const liveCards = () => (board()?.cards ?? []).filter((c) => !c.deleted);
 const cardById = (id) => (id ? liveCards().find((c) => c.id === id) ?? null : null);
+const boardGroups = () => liveGroups(board());
+const groupById = (id) => (id ? boardGroups().find((g) => g.id === id) ?? null : null);
+const groupCards = (id) => liveCards().filter((c) => c.groupId === id);
 
 function ensureBoard() {
   if (!board()) boardId = liveBoards()[0]?.id ?? null;
@@ -58,11 +63,28 @@ function ensureBoard() {
   }
 }
 
-function touchCard(id, patch) {
+function touchCard(id, patch, t = Date.now()) {
   const c = cardById(id);
   if (!c) return null;
-  Object.assign(c, patch, { updatedAt: Date.now() });
+  Object.assign(c, patch, { updatedAt: t });
   return c;
+}
+
+// 카드를 묶음에서 뺄 때는 groupId 키를 지운다(저장 스키마가 문자열만 받아 null을 쓰지 않는다).
+function setCardGroup(id, groupId, t = Date.now()) {
+  const c = cardById(id);
+  if (!c) return null;
+  if (typeof groupId === 'string' && groupId) c.groupId = groupId;
+  else delete c.groupId;
+  c.updatedAt = t;
+  return c;
+}
+
+function touchGroup(id, patch, t = Date.now()) {
+  const g = groupById(id);
+  if (!g) return null;
+  Object.assign(g, patch, { updatedAt: t });
+  return g;
 }
 
 // --- 저장 ---
@@ -106,20 +128,44 @@ function youtubeId(url) {
 const preview = createPreview();
 let embedState; // 마지막으로 쓴 yt_embed. 같은 값을 다시 쓰지 않는다.
 
+// SHIM(p2/x): panel.js에 묶음 출력이 들어오기 전까지 group_selected·has_group_selected를 여기서 채운다.
+// panel 쪽 브랜치를 합친 뒤 이 함수와 publishPanel 안의 호출 한 줄을 지운다.
+// panelOutputs가 이미 group_selected를 내면 아무것도 하지 않는다.
+function shimGroupPanel(sel, panel) {
+  if ('group_selected' in panel) return panel;
+  const g = sel?.group ?? null;
+  if (!g) return { ...panel, group_selected: null, has_group_selected: false };
+  // 묶음을 골랐을 때는 카드 쪽 출력을 비운다.
+  return { ...panelOutputs(null), sel_none: false, group_selected: { id: g.id, name: g.name, count: g.count }, has_group_selected: true };
+}
+
 // 옆 칸 출력. web_view의 url은 창 상태만 받으므로 유튜브 주소는 상태 yt_embed에도 쓴다.
-function publishPanel(selected) {
-  const panel = panelOutputs(selected);
-  p.publish({ selected, selected_url: selected?.url ?? null, ...panel });
+// sel: 카드 선택 객체 | {group:{id, name, count}} | null
+function publishPanel(sel) {
+  const panel = shimGroupPanel(sel, panelOutputs(sel)); // SHIM(p2/x): 합친 뒤 panelOutputs(sel)만 남긴다
+  const card = sel && !sel.group ? sel : null;
+  const count = sel?.group ? sel.group.count : null;
+  p.publish({
+    selected: card,
+    selected_url: card?.url ?? null,
+    group_count_label: count == null ? '' : `${count}장`,
+    ...panel,
+  });
   if (panel.embed_url !== embedState) {
     embedState = panel.embed_url;
     p.setState(EMBED_STATE, panel.embed_url);
   }
-  preview.show(panel.sel_thumb_preview ? selected.thumbDataUrl : null);
+  preview.show(card && panel.sel_thumb_preview ? card.thumbDataUrl : null);
 }
 
 let selectSeq = 0;
 async function publishSelected() {
   const seq = ++selectSeq;
+  const g = groupById(selectedGroupId);
+  if (g) {
+    publishPanel({ group: { id: g.id, name: g.name ?? '', count: groupCards(g.id).length } });
+    return;
+  }
   const c = cardById(selectedId);
   if (!c) {
     publishPanel(null);
@@ -150,6 +196,16 @@ async function publishSelected() {
   publishPanel(selected);
 }
 
+// 카드 하나 또는 묶음 하나를 고른다. 둘 다 null이면 선택을 푼다.
+function select({ cardId = null, groupId = null } = {}) {
+  const prevGroup = selectedGroupId;
+  selectedId = cardId;
+  selectedGroupId = cardId ? null : groupId;
+  // 이름 입력칸은 묶음을 새로 고를 때만 채운다(입력 중인 글을 덮지 않는다).
+  if (selectedGroupId && selectedGroupId !== prevGroup) p.setState('group_name', groupById(selectedGroupId)?.name ?? '');
+  publishSelected();
+}
+
 function publishBoards() {
   p.publish({
     board_options: liveBoards().map((b) => ({ value: b.id, label: b.name })),
@@ -164,10 +220,26 @@ function publishMode() {
 
 // --- 그리기 ---
 
+// 쉘 테마(시스템이면 OS 설정)를 frame의 prefers-color-scheme으로 받는다.
+const darkQuery = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
+let themeKey = themeName(!!darkQuery?.matches);
+
 const renderer = createRenderer({
-  scene: () => ({ cards: ui.cards, view: ui.view, selectedId, drag: ui.drag, mode: ui.mode }),
+  scene: () => ({
+    cards: ui.cards, groups: ui.groups, view: ui.view, selectedId, selectedGroupId, drag: ui.drag, mode: ui.mode,
+  }),
   thumbB64: (id) => (thumbs ? thumbs.get(id) : Promise.resolve(null)),
+  theme: () => THEMES[themeKey],
 });
+
+function setTheme(name) {
+  if (name !== themeKey) {
+    themeKey = name;
+    renderer.redraw();
+  }
+  p.setState('theme', name);
+}
+darkQuery?.addEventListener?.('change', (e) => setTheme(themeName(!!e.matches)));
 
 function targets() {
   const m = new Map();
@@ -180,10 +252,17 @@ function refresh(animate) {
   ensureBoard();
   const cards = liveCards();
   const sorted = sortedLayout(cards, { cols: sortCols(cards.length), cell: SORT_CELL, gap: SORT_GAP });
-  ui = { ...ui, cards, sorted };
-  if (selectedId && !cardById(selectedId)) { selectedId = null; publishSelected(); }
+  ui = { ...ui, cards, groups: boardGroups(), sorted };
+  if (selectedId && !cardById(selectedId)) select();
+  else if (selectedGroupId && !groupById(selectedGroupId)) select();
   renderer.setTargets(targets(), animate);
   publishBoards();
+}
+
+// 문서 객체를 고친 뒤 화면 상태만 다시 맞춘다(정렬 배치는 그대로).
+function syncUi() {
+  ui = { ...ui, cards: liveCards(), groups: boardGroups() };
+  renderer.setTargets(targets(), false);
 }
 
 function surfaceSize() {
@@ -273,13 +352,37 @@ p.handle('pointer', ({ event } = {}) => {
   ui = r.state;
   for (const e of r.effects) {
     if (e.type === 'select') {
-      selectedId = e.cardId;
-      publishSelected();
+      select({ cardId: e.cardId ?? null, groupId: e.groupId ?? null });
       clearNotice();
     } else if (e.type === 'moved') {
       touchCard(e.cardId, { manual: { ...e.rect } });
-      ui = { ...ui, cards: liveCards() };
-      renderer.setTargets(targets(), false);
+      syncUi();
+      scheduleSave(DRAG_SAVE_MS);
+      clearNotice();
+    } else if (e.type === 'membership') {
+      setCardGroup(e.cardId, e.groupId);
+      syncUi();
+      scheduleSave(DRAG_SAVE_MS);
+      if (selectedGroupId) publishSelected(); // 카드 수가 바뀐다
+    } else if (e.type === 'group_moved') {
+      // 묶음과 안의 카드를 한 번의 저장(saveWithRetry 한 번)에 담는다. 디바운스하지 않는다.
+      const t = Date.now();
+      touchGroup(e.groupId, { rect: { ...e.rect } }, t);
+      for (const m of e.cards ?? []) touchCard(m.cardId, { manual: { ...m.rect } }, t);
+      syncUi();
+      scheduleSave(0);
+      clearNotice();
+    } else if (e.type === 'group_resized') {
+      touchGroup(e.groupId, { rect: { ...e.rect } });
+      syncUi();
+      scheduleSave(DRAG_SAVE_MS);
+      clearNotice();
+    } else if (e.type === 'group_toggled') {
+      const g = groupById(e.groupId);
+      if (g) touchGroup(g.id, { collapsed: !g.collapsed });
+      // 접혀서 숨은 카드는 선택을 푼다
+      if (g?.collapsed && cardById(selectedId)?.groupId === g.id) select();
+      syncUi();
       scheduleSave(DRAG_SAVE_MS);
       clearNotice();
     } else if (e.type === 'notice') {
@@ -289,12 +392,57 @@ p.handle('pointer', ({ event } = {}) => {
   if (ui.drag || prevDrag) renderer.redraw();
 });
 
+// --- 묶음 ---
+
+p.handle('group_add', () => {
+  const b = board();
+  if (!b) return;
+  if (ui.mode !== 'manual') setMode('manual'); // 정렬 모드에서는 묶음이 보이지 않는다
+  const size = surfaceSize();
+  const c = toWorld(ui.view, { x: size.w / 2, y: size.h / 2 });
+  const { w, h } = GROUP_DEFAULT_SIZE;
+  const g = newGroup({ rect: { x: c.x - w / 2, y: c.y - h / 2, w, h } });
+  if (!Array.isArray(b.groups)) b.groups = [];
+  b.groups.push(g);
+  refresh(false);
+  select({ groupId: g.id });
+  scheduleSave();
+  clearNotice();
+});
+
+p.handle('group_rename', ({ event } = {}) => {
+  const raw = typeof event === 'string' ? event : p.getState('group_name');
+  const name = typeof raw === 'string' ? raw.trim() : '';
+  const g = groupById(selectedGroupId);
+  if (!g || !name) return;
+  if (name !== g.name) {
+    touchGroup(g.id, { name });
+    syncUi();
+    scheduleSave(DRAG_SAVE_MS);
+  }
+  p.setState('group_name', name);
+  publishSelected();
+  clearNotice();
+});
+
+p.handle('group_delete', () => {
+  const g = groupById(selectedGroupId);
+  if (!g) return;
+  const t = Date.now();
+  // 묶음은 묘비로 남기고, 안의 카드는 groupId를 지운다. 카드 자체는 남는다.
+  for (const c of groupCards(g.id)) setCardGroup(c.id, null, t);
+  touchGroup(g.id, { deleted: true }, t);
+  select();
+  refresh(false);
+  scheduleSave();
+  clearNotice();
+});
+
 p.handle('delete_selected', async () => {
   const c = cardById(selectedId);
   if (!c) return;
   touchCard(c.id, { deleted: true });
-  selectedId = null;
-  publishSelected();
+  select();
   refresh(false);
   scheduleSave();
   clearNotice();
@@ -344,8 +492,7 @@ p.handle('board_select', ({ event } = {}) => {
   if (!liveBoards().some((b) => b.id === id) || id === boardId) return;
   boardId = id;
   p.setState('board', id);
-  selectedId = null;
-  publishSelected();
+  select();
   ui = { ...ui, drag: null, view: { x: 0, y: 0, scale: 1 } };
   refresh(false);
   clearNotice();
@@ -356,8 +503,7 @@ p.handle('board_new', () => {
   doc.boards.push(b);
   boardId = b.id;
   p.setState('board', b.id);
-  selectedId = null;
-  publishSelected();
+  select();
   ui = { ...ui, drag: null, view: { x: 0, y: 0, scale: 1 } };
   refresh(false);
   scheduleSave();
@@ -466,7 +612,7 @@ p.storage.watch(BOARDS_ENTRY, (value) => {
   if (!loaded) { finishBoardsLoad(value); updateLoading(); return; }
   doc = mergeBoards(doc, value);
   refresh(false);
-  if (selectedId) publishSelected();
+  if (selectedId || selectedGroupId) publishSelected();
 }, () => { /* 시작 읽기의 재시도가 알린다 */ });
 
 // 썸네일 저장소가 생기기 전에 온 shard 값은 모아 두었다가(마지막 값이 이긴다) 저장소가 생기면 적용한다.
@@ -499,6 +645,7 @@ async function start() {
   publishPanel(null);
   publishNotice();
   publishMode();
+  setTheme(themeKey);
   const saved = p.getState('board');
   if (typeof saved === 'string') boardId = saved;
 

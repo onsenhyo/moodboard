@@ -1,25 +1,25 @@
-// 브라우저 전용 캔버스 그리기. 테스트하지 않는다.
+// 브라우저 전용 캔버스 그리기. 순수한 부분(그리는 순서, 카드 매트, 묶음 이름)은 drawplan.js에 두고 테스트한다.
 //
-// createRenderer({scene, thumbB64}) -> {attach, setTargets, redraw, invalidateThumbs}
-// - scene() -> {cards, view, selectedId, drag, mode}. drag.rect가 있으면 그 카드는 그 자리에 그린다.
+// createRenderer({scene, thumbB64, theme}) -> {attach, setTargets, redraw, invalidateThumbs}
+// - scene() -> {cards, groups, view, selectedId, selectedGroupId, drag, mode}.
+//   drag.rect가 있으면 그 카드(또는 묶음)는 그 자리에 그린다. 묶음을 끌 때는 drag.cards의 자리에 카드를 그린다.
 // - thumbB64(cardId) -> Promise<string|null>. 썸네일 base64(data: 접두 없음).
+// - theme() -> THEMES의 한 값(theme.js). 그릴 때마다 묻는다.
 // - attach(surface|null): client.surfaces.on이 준 표면. visible이 false이면 그리기 루프를 멈춘다.
 // - setTargets(Map<cardId, rect>, animate): 카드의 목표 자리. animate이면 지금 자리에서 300ms ease-out으로 옮긴다.
 // - invalidateThumbs(): 썸네일 shard가 바뀌었을 때. 다음 그리기에서 base64 길이를 다시 보고 다르면 새로 디코드한다.
+//
+// 모든 사각형은 각지게 그린다(둥근 모서리 없음).
 
 import { toScreen } from './layout.js';
+import { THEMES, groupDotColor } from './theme.js';
+import { drawList, cardChrome, groupBox, groupLabel, groupMembers } from './drawplan.js';
 
 const ANIM_MS = 300;
-const BG = '#e8e5df';
-const PAPER = '#f3efe6';
-const INK = '#3b3833';
-const MUTED = '#77736c';
-const LOADING = '#d9d5ce';
-const PLACEHOLDER = '#cbc7c0';
-const LINK_BG = '#fbfaf7';
-const SELECT = '#2f6fde';
-const RADIUS = 6;
-const FONT = 'system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+const HANDLE_PX = 12;
+const GROUP_LABEL_LEFT = 10; // 목업 left:10px
+const GROUP_DOT_PX = 7;
+const GROUP_DOT_GAP = 6;
 const BADGE = { youtube: '▶', video: '🎞', pinterest: '📌', text: '✎', link: '🔗' };
 
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
@@ -31,17 +31,6 @@ function b64ToBytes(b64) {
   const u8 = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
   return u8;
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
 }
 
 function ellipsize(ctx, text, maxW) {
@@ -79,7 +68,11 @@ function hostOf(url) {
   try { return new URL(url).hostname; } catch { return String(url ?? ''); }
 }
 
-export function createRenderer({ scene, thumbB64 }) {
+function setLetterSpacing(ctx, v) {
+  if ('letterSpacing' in ctx) ctx.letterSpacing = v;
+}
+
+export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) {
   let surface = null;
   let onResize = null;
   let raf = 0;
@@ -153,118 +146,216 @@ export function createRenderer({ scene, thumbB64 }) {
       });
   }
 
+  // --- 바탕 ---
+
+  function drawBackground(ctx, th, view, w, h) {
+    ctx.fillStyle = th.bg;
+    ctx.fillRect(0, 0, w, h);
+    const g = th.grid;
+    if (!g) return;
+    // 점 격자는 화면 px 간격으로 두고, 끌어 옮기면 함께 밀린다.
+    const step = g.step;
+    const ox = ((-view.x * view.scale) % step + step) % step;
+    const oy = ((-view.y * view.scale) % step + step) % step;
+    const r = g.r ?? 1;
+    ctx.fillStyle = g.dot;
+    for (let y = oy; y < h + step; y += step) {
+      for (let x = ox; x < w + step; x += step) ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+  }
+
+  // --- 묶음 ---
+
+  function drawGroup(ctx, th, group, s, members) {
+    const box = groupBox(group, s);
+    ctx.save();
+    ctx.fillStyle = th.groupFill;
+    ctx.fillRect(box.x, box.y, box.w, box.h);
+    ctx.strokeStyle = th.groupLine;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(box.x + 0.5, box.y + 0.5, Math.max(0, box.w - 1), Math.max(0, box.h - 1));
+
+    const label = groupLabel(th, group, members.length);
+    ctx.font = th.groupLabelFont;
+    setLetterSpacing(ctx, th.groupLabelSpacing ?? '0px');
+    ctx.fillStyle = th.groupLabelInk;
+    let x = box.x + GROUP_LABEL_LEFT;
+    let y;
+    if (group.collapsed) {
+      // 접힌 묶음: 제목줄 안에 쓴다.
+      ctx.textBaseline = 'middle';
+      y = box.y + box.h / 2;
+    } else {
+      // 펼친 묶음: 상자 위쪽 바깥에 쓴다.
+      ctx.textBaseline = 'alphabetic';
+      y = box.y - (th.groupLabelGap ?? 4);
+    }
+    const maxW = Math.max(0, box.w - GROUP_LABEL_LEFT * 2);
+    if (th.groupDot) {
+      const cy = group.collapsed ? y : y - 4;
+      ctx.beginPath();
+      ctx.arc(x + GROUP_DOT_PX / 2, cy, GROUP_DOT_PX / 2, 0, Math.PI * 2);
+      ctx.fillStyle = members.length ? groupDotColor(members) : th.groupDotFallback;
+      ctx.fill();
+      ctx.fillStyle = th.groupLabelInk;
+      x += GROUP_DOT_PX + GROUP_DOT_GAP;
+    }
+    ctx.fillText(ellipsize(ctx, label, Math.max(0, maxW - (x - box.x - GROUP_LABEL_LEFT))), x, y);
+    setLetterSpacing(ctx, '0px');
+    ctx.restore();
+  }
+
+  // --- 카드 ---
+
   function drawCover(ctx, bmp, s) {
     const k = Math.max(s.w / bmp.width, s.h / bmp.height);
     const w = bmp.width * k, h = bmp.height * k;
     ctx.drawImage(bmp, s.x + (s.w - w) / 2, s.y + (s.h - h) / 2, w, h);
   }
 
-  function drawText(ctx, card, s) {
-    ctx.fillStyle = PAPER;
+  function drawText(ctx, th, card, s) {
+    ctx.fillStyle = th.textBg;
     ctx.fillRect(s.x, s.y, s.w, s.h);
-    const pad = 10;
+    const bar = th.textAccentBar ? th.textAccentWidth ?? 3 : 0;
+    if (bar) {
+      ctx.fillStyle = card.color || '#9e9e9e';
+      ctx.fillRect(s.x, s.y, bar, s.h);
+    }
+    const pad = 12;
     if (s.w > 40 && s.h > 30) {
-      ctx.fillStyle = INK;
-      ctx.font = `13px ${FONT}`;
+      ctx.fillStyle = th.textInk;
+      ctx.font = th.textFont;
       ctx.textBaseline = 'top';
       const lineH = 18;
-      const maxLines = Math.max(1, Math.floor((s.h - pad * 2 - 14) / lineH));
-      const lines = wrap(ctx, card.text ?? card.title, s.w - pad * 2, maxLines);
-      lines.forEach((l, i) => ctx.fillText(ellipsize(ctx, l, s.w - pad * 2), s.x + pad, s.y + pad + i * lineH));
+      const maxLines = Math.max(1, Math.floor((s.h - pad * 2 - (bar ? 0 : 14)) / lineH));
+      const maxW = s.w - pad * 2 - bar;
+      const lines = wrap(ctx, card.text ?? card.title, maxW, maxLines);
+      lines.forEach((l, i) => ctx.fillText(ellipsize(ctx, l, maxW), s.x + bar + pad, s.y + pad + i * lineH));
     }
-    const r = Math.max(3, Math.min(6, s.w / 20));
-    ctx.beginPath();
-    ctx.arc(s.x + s.w - pad - r, s.y + s.h - pad - r, r, 0, Math.PI * 2);
-    ctx.fillStyle = card.color || '#9e9e9e';
-    ctx.fill();
+    if (!bar) {
+      // 라이트: 색 띠 대신 오른쪽 아래 작은 색 점
+      const r = Math.max(3, Math.min(6, s.w / 20));
+      ctx.beginPath();
+      ctx.arc(s.x + s.w - pad - r, s.y + s.h - pad - r, r, 0, Math.PI * 2);
+      ctx.fillStyle = card.color || '#9e9e9e';
+      ctx.fill();
+    }
   }
 
-  function drawLink(ctx, card, s) {
-    ctx.fillStyle = LINK_BG;
+  function drawLink(ctx, th, card, s) {
+    ctx.fillStyle = th.linkBg;
     ctx.fillRect(s.x, s.y, s.w, s.h);
     if (s.w < 40 || s.h < 30) return;
     const pad = 10;
     ctx.textBaseline = 'top';
-    ctx.fillStyle = INK;
-    ctx.font = `600 14px ${FONT}`;
+    ctx.fillStyle = th.linkInk;
+    ctx.font = th.linkTitleFont;
     ctx.fillText(ellipsize(ctx, hostOf(card.url) || card.title, s.w - pad * 2), s.x + pad, s.y + s.h / 2 - 18);
-    ctx.fillStyle = MUTED;
-    ctx.font = `11px ${FONT}`;
+    ctx.fillStyle = th.linkMuted;
+    ctx.font = th.linkUrlFont;
     ctx.fillText(ellipsize(ctx, card.url, s.w - pad * 2), s.x + pad, s.y + s.h / 2 + 2);
   }
 
-  function drawPlaceholder(ctx, card, s) {
-    ctx.fillStyle = PLACEHOLDER;
+  function drawPlaceholder(ctx, th, card, s) {
+    ctx.fillStyle = th.placeholderBg;
     ctx.fillRect(s.x, s.y, s.w, s.h);
     if (s.w < 40 || s.h < 30) return;
-    ctx.fillStyle = INK;
-    ctx.font = `12px ${FONT}`;
+    ctx.fillStyle = th.placeholderInk;
+    ctx.font = th.placeholderFont;
     ctx.textBaseline = 'middle';
     ctx.fillText(ellipsize(ctx, card.title, s.w - 20), s.x + 10, s.y + s.h / 2);
   }
 
-  function drawBadge(ctx, card, s) {
+  function drawBadge(ctx, th, card, at, inner) {
     const b = BADGE[card.kind];
-    if (!b || s.w < 32 || s.h < 32) return;
-    ctx.font = `12px ${FONT}`;
+    if (!b || inner.w < 32 || inner.h < 32) return;
+    ctx.font = th.badgeFont;
     ctx.textBaseline = 'middle';
     const w = ctx.measureText(b).width + 10;
-    roundRect(ctx, s.x + 6, s.y + 6, w, 20, 10);
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fill();
-    ctx.fillStyle = INK;
-    ctx.fillText(b, s.x + 11, s.y + 16);
+    const h = 16;
+    ctx.fillStyle = th.badgeBg;
+    ctx.fillRect(at.x, at.y, w, h);
+    ctx.fillStyle = th.badgeInk;
+    ctx.fillText(b, at.x + 5, at.y + h / 2);
   }
 
-  function drawNote(ctx, card, s) {
+  function drawNote(ctx, th, card, s) {
     if (!card.note || s.w < 40 || s.h < 40) return;
     const h = 22;
-    ctx.fillStyle = 'rgba(30,28,25,0.62)';
+    ctx.fillStyle = th.noteBg;
     ctx.fillRect(s.x, s.y + s.h - h, s.w, h);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `11px ${FONT}`;
+    ctx.fillStyle = th.noteInk;
+    ctx.font = th.noteFont;
     ctx.textBaseline = 'middle';
     ctx.fillText(ellipsize(ctx, card.note, s.w - 12), s.x + 6, s.y + s.h - h / 2);
   }
 
-  function drawCard(ctx, card, s, selected, manual) {
+  function drawCard(ctx, th, card, s, scale) {
+    const ch = cardChrome(th, card, s, scale);
+    const o = ch.outer, inner = ch.inner;
     ctx.save();
-    roundRect(ctx, s.x, s.y, s.w, s.h, RADIUS);
-    ctx.shadowColor = 'rgba(0,0,0,0.12)';
-    ctx.shadowBlur = 6;
-    ctx.shadowOffsetY = 1;
-    ctx.fillStyle = LOADING;
-    ctx.fill();
+    // 그림자: 겹마다 같은 사각형을 한 번씩 칠한다.
+    ctx.fillStyle = ch.matBg ?? th.loadingBg;
+    for (const sh of ch.shadows) {
+      ctx.shadowColor = sh.color;
+      ctx.shadowBlur = sh.blur;
+      ctx.shadowOffsetY = sh.y;
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+    }
     ctx.shadowColor = 'transparent';
-    ctx.clip();
-    if (card.hasThumb) {
-      const bmp = bitmapFor(card);
-      if (bmp) drawCover(ctx, bmp, s);
-    } else if (card.kind === 'text') drawText(ctx, card, s);
-    else if (card.kind === 'link' || card.kind === 'youtube' || card.kind === 'pinterest') drawLink(ctx, card, s);
-    else drawPlaceholder(ctx, card, s);
-    drawBadge(ctx, card, s);
-    drawNote(ctx, card, s);
-    ctx.restore();
-    if (selected) {
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    if (!ch.shadows.length) ctx.fillRect(o.x, o.y, o.w, o.h);
+    if (ch.caption && th.captionColor) {
       ctx.save();
-      roundRect(ctx, s.x - 1.5, s.y - 1.5, s.w + 3, s.h + 3, RADIUS + 1.5);
-      ctx.strokeStyle = SELECT;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      if (manual) {
-        // 크기 조절 손잡이
-        ctx.beginPath();
-        ctx.moveTo(s.x + s.w, s.y + s.h - 12);
-        ctx.lineTo(s.x + s.w, s.y + s.h);
-        ctx.lineTo(s.x + s.w - 12, s.y + s.h);
-        ctx.closePath();
-        ctx.fillStyle = SELECT;
-        ctx.fill();
-      }
+      ctx.beginPath();
+      ctx.rect(o.x, o.y, o.w, o.h);
+      ctx.clip();
+      ctx.fillStyle = th.captionColor;
+      ctx.font = th.captionFont;
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(ellipsize(ctx, ch.caption.text, inner.w), ch.caption.x, ch.caption.y);
       ctx.restore();
     }
+    // 내용은 카드(매트 안쪽) 밖으로 나가지 않게 자른다.
+    ctx.beginPath();
+    ctx.rect(inner.x, inner.y, inner.w, inner.h);
+    ctx.clip();
+    if (card.hasThumb) {
+      ctx.fillStyle = th.loadingBg;
+      ctx.fillRect(inner.x, inner.y, inner.w, inner.h);
+      const bmp = bitmapFor(card);
+      if (bmp) drawCover(ctx, bmp, inner);
+    } else if (card.kind === 'text') drawText(ctx, th, card, inner);
+    else if (card.kind === 'link' || card.kind === 'youtube' || card.kind === 'pinterest') drawLink(ctx, th, card, inner);
+    else drawPlaceholder(ctx, th, card, inner);
+    drawBadge(ctx, th, card, ch.badgeAt, inner);
+    drawNote(ctx, th, card, inner);
+    ctx.restore();
   }
+
+  // --- 선택 ---
+
+  function drawSelection(ctx, th, box, handle) {
+    const lw = th.selectWidth ?? 2;
+    ctx.save();
+    ctx.strokeStyle = th.selectLine;
+    ctx.lineWidth = lw;
+    ctx.strokeRect(box.x - lw / 2 - 1, box.y - lw / 2 - 1, box.w + lw + 2, box.h + lw + 2);
+    if (handle) {
+      // 크기 조절 손잡이
+      ctx.beginPath();
+      ctx.moveTo(box.x + box.w, box.y + box.h - HANDLE_PX);
+      ctx.lineTo(box.x + box.w, box.y + box.h);
+      ctx.lineTo(box.x + box.w - HANDLE_PX, box.y + box.h);
+      ctx.closePath();
+      ctx.fillStyle = th.selectLine;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // --- 한 장 ---
 
   function draw(t) {
     const { canvas, cssWidth, cssHeight, dpr } = surface;
@@ -274,18 +365,59 @@ export function createRenderer({ scene, thumbB64 }) {
     if (canvas.height !== height) canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, width, height);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const th = theme() ?? THEMES.light;
     const sc = scene();
+    const view = sc.view;
     const manual = sc.mode !== 'sorted';
-    for (const card of sc.cards) {
-      const r = sc.drag?.cardId === card.id && sc.drag.rect && sc.drag.moved ? sc.drag.rect : currentRect(card.id, t) ?? card.manual;
-      if (!r) continue;
-      const s = toScreen(sc.view, r);
-      if (s.x > cssWidth || s.y > cssHeight || s.x + s.w < 0 || s.y + s.h < 0) continue;
-      drawCard(ctx, card, s, card.id === sc.selectedId, manual);
+    const drag = sc.drag;
+    const cards = sc.cards ?? [];
+    const groups = sc.groups ?? [];
+    const cardsById = new Map(cards.map((c) => [c.id, c]));
+    const groupsById = new Map(groups.map((g) => [g.id, g]));
+    // 묶음을 끄는 동안 안의 카드 자리
+    const dragCards = drag?.kind === 'group' && drag.moved && Array.isArray(drag.cards)
+      ? new Map(drag.cards.map((c) => [c.cardId, c.rect]))
+      : null;
+
+    const cardRect = (card) => {
+      if (drag?.cardId === card.id && drag.rect && drag.moved) return drag.rect;
+      if (manual && dragCards?.has(card.id)) return dragCards.get(card.id);
+      return currentRect(card.id, t) ?? card.manual;
+    };
+    const groupRect = (g) =>
+      drag?.groupId === g.id && drag.moved && (drag.kind === 'group' || drag.kind === 'group_resize') ? drag.rect : g.rect;
+    const offscreen = (s) => s.x > cssWidth || s.y > cssHeight || s.x + s.w < 0 || s.y + s.h < 0;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (const item of drawList({ ...sc, cards, groups })) {
+      if (item.kind === 'background') {
+        drawBackground(ctx, th, view, cssWidth, cssHeight);
+      } else if (item.kind === 'group') {
+        const g = groupsById.get(item.id);
+        const r = g && groupRect(g);
+        if (!r) continue;
+        const s = toScreen(view, r);
+        // 이름은 상자 위 바깥에 있으므로 위쪽은 넉넉히 본다
+        if (offscreen({ ...s, y: s.y - 24, h: s.h + 24 })) continue;
+        drawGroup(ctx, th, g, s, groupMembers(cards, g.id));
+      } else if (item.kind === 'card') {
+        const card = cardsById.get(item.id);
+        const r = card && cardRect(card);
+        if (!r) continue;
+        const s = toScreen(view, r);
+        if (offscreen(s)) continue;
+        drawCard(ctx, th, card, s, view.scale);
+      } else if (item.kind === 'selection') {
+        if (item.target === 'card') {
+          const card = cardsById.get(item.id);
+          const r = card && cardRect(card);
+          if (r) drawSelection(ctx, th, toScreen(view, r), manual);
+        } else {
+          const g = groupsById.get(item.id);
+          const r = g && groupRect(g);
+          if (r) drawSelection(ctx, th, groupBox(g, toScreen(view, r)), !g.collapsed);
+        }
+      }
     }
   }
 

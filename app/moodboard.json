@@ -60,7 +60,9 @@
     "board_name": "",
     "board": null,
     "yt_embed": null,
-    "rename_open": false
+    "rename_open": false,
+    "group_name": "",
+    "theme": "light"
   },
   "assets": [
     {
@@ -2145,6 +2147,15 @@
       },
       "sel_openable": {
         "default": false
+      },
+      "group_selected": {
+        "default": null
+      },
+      "has_group_selected": {
+        "default": false
+      },
+      "group_count_label": {
+        "default": ""
       }
     },
     "actions": [
@@ -2164,14 +2175,19 @@
       "board_select",
       "board_new",
       "board_rename",
-      "export"
+      "export",
+      "group_add",
+      "group_rename",
+      "group_delete"
     ],
     "state_keys": [
       "draft",
       "board_name",
       "board",
       "yt_embed",
-      "rename_open"
+      "rename_open",
+      "group_name",
+      "theme"
     ],
     "storage_entries": [
       "boards",
@@ -2435,6 +2451,13 @@
                 "client": "pick"
               }
             }
+          },
+          {
+            "type": "button",
+            "label": "묶음 추가",
+            "on_click": {
+              "client": "group_add"
+            }
           }
         ],
         "end": [
@@ -2538,6 +2561,54 @@
             "direction": "column",
             "gap": "small",
             "children": [
+              {
+                "type": "when",
+                "value": {
+                  "client": "has_group_selected"
+                },
+                "child": {
+                  "type": "stack",
+                  "direction": "column",
+                  "gap": "small",
+                  "children": [
+                    {
+                      "type": "input",
+                      "label": "묶음 이름",
+                      "label_position": "top",
+                      "placeholder": "묶음 이름을 넣고 Enter",
+                      "value": {
+                        "state": "group_name"
+                      },
+                      "commit": "submit",
+                      "on_change": {
+                        "set_state": "group_name"
+                      },
+                      "on_submit": {
+                        "client": "group_rename"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "style": "meta",
+                      "value": {
+                        "client": "group_count_label"
+                      }
+                    },
+                    {
+                      "type": "button",
+                      "label": "묶음 삭제",
+                      "variant": "danger",
+                      "on_click": {
+                        "client": "group_delete"
+                      },
+                      "confirm": {
+                        "title": "이 묶음을 지울까요? 안의 카드는 남아요",
+                        "ok": "삭제"
+                      }
+                    }
+                  ]
+                }
+              },
               {
                 "type": "when",
                 "value": {
