@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { drawList, cardChrome, groupBox, groupLabel, groupMembers, CAPTION_WORDS } from '../src/drawplan.js';
+import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle, CAPTION_WORDS } from '../src/drawplan.js';
+import { hitTestGroup, toWorld, GROUP_TOGGLE_PX, GROUP_TITLE_PX } from '../src/layout.js';
 import { THEMES } from '../src/theme.js';
 
 const rect = (x, y, w = 100, h = 80) => ({ x, y, w, h });
@@ -90,10 +91,35 @@ test('groupBox: 접힌 묶음은 28px 제목줄만', () => {
   assert.deepEqual(groupBox({ collapsed: true }, s), { x: 0, y: 0, w: 300, h: 28 });
 });
 
-test('groupLabel: 펼침은 ▾ 이름, 접힘은 ▸ 이름 · N장, 라이트는 대문자', () => {
-  assert.equal(groupLabel(THEMES.dark, { name: 'Warm', collapsed: false }, 3), '▾ Warm');
-  assert.equal(groupLabel(THEMES.dark, { name: 'Warm', collapsed: true }, 3), '▸ Warm · 3장');
-  assert.equal(groupLabel(THEMES.light, { name: 'Warm', collapsed: true }, 0), '▸ WARM · 0장');
+test('groupLabel: 펼침은 이름만(상자 위), 접힘은 이름 · N장, 라이트는 대문자', () => {
+  assert.equal(groupLabel(THEMES.dark, { name: 'Warm', collapsed: false }, 3), 'Warm');
+  assert.equal(groupLabel(THEMES.dark, { name: 'Warm', collapsed: true }, 3), 'Warm · 3장');
+  assert.equal(groupLabel(THEMES.light, { name: 'Warm', collapsed: true }, 0), 'WARM · 0장');
+});
+
+test('groupToggle: 글리프는 상자 안 왼쪽 위 24×28 접기 영역 가운데', () => {
+  const s = rect(50, 70, 300, 200);
+  const open = groupToggle({ collapsed: false }, s);
+  assert.equal(open.glyph, '▾');
+  assert.deepEqual(open.zone, { x: 50, y: 70, w: GROUP_TOGGLE_PX, h: GROUP_TITLE_PX });
+  assert.equal(open.cx, 50 + 12);
+  assert.equal(open.cy, 70 + 14);
+  const shut = groupToggle({ collapsed: true }, groupBox({ collapsed: true }, s));
+  assert.equal(shut.glyph, '▸');
+  assert.deepEqual(shut.zone, open.zone);
+});
+
+test('groupToggle: 글리프 중심을 누르면 interaction의 접기 판정에 맞는다', () => {
+  for (const scale of [0.5, 1, 2]) {
+    for (const collapsed of [false, true]) {
+      const view = { x: -10, y: -20, scale };
+      const g = { id: 'g', rect: rect(100, 100, 400, 300), collapsed };
+      const s = { x: (100 - view.x) * scale, y: (100 - view.y) * scale, w: 400 * scale, h: 300 * scale };
+      const tg = groupToggle(g, groupBox(g, s));
+      const hit = hitTestGroup([g], toWorld(view, { x: tg.cx, y: tg.cy }), scale);
+      assert.equal(hit?.zone, 'toggle', `scale ${scale} collapsed ${collapsed}`);
+    }
+  }
 });
 
 test('groupMembers: groupId가 같은 살아 있는 카드', () => {

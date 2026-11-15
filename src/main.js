@@ -128,21 +128,10 @@ function youtubeId(url) {
 const preview = createPreview();
 let embedState; // 마지막으로 쓴 yt_embed. 같은 값을 다시 쓰지 않는다.
 
-// SHIM(p2/x): panel.js에 묶음 출력이 들어오기 전까지 group_selected·has_group_selected를 여기서 채운다.
-// panel 쪽 브랜치를 합친 뒤 이 함수와 publishPanel 안의 호출 한 줄을 지운다.
-// panelOutputs가 이미 group_selected를 내면 아무것도 하지 않는다.
-function shimGroupPanel(sel, panel) {
-  if ('group_selected' in panel) return panel;
-  const g = sel?.group ?? null;
-  if (!g) return { ...panel, group_selected: null, has_group_selected: false };
-  // 묶음을 골랐을 때는 카드 쪽 출력을 비운다.
-  return { ...panelOutputs(null), sel_none: false, group_selected: { id: g.id, name: g.name, count: g.count }, has_group_selected: true };
-}
-
 // 옆 칸 출력. web_view의 url은 창 상태만 받으므로 유튜브 주소는 상태 yt_embed에도 쓴다.
 // sel: 카드 선택 객체 | {group:{id, name, count}} | null
 function publishPanel(sel) {
-  const panel = shimGroupPanel(sel, panelOutputs(sel)); // SHIM(p2/x): 합친 뒤 panelOutputs(sel)만 남긴다
+  const panel = panelOutputs(sel);
   const card = sel && !sel.group ? sel : null;
   const count = sel?.group ? sel.group.count : null;
   p.publish({

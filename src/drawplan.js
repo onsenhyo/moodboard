@@ -5,11 +5,13 @@
 // cardChrome(theme, card, s, scale) -> {outer, inner, matBg, caption, badgeAt, shadows}
 //   s는 카드의 화면 rect. 사진 카드(hasThumb)는 라이트에서 흰 매트 안쪽(inner)에 그림을 그린다.
 // groupBox(group, s) -> 묶음의 화면 상자. 접힌 묶음은 28px 제목줄만.
-// groupLabel(theme, group, count) -> 묶음 이름 글자. 펼침 '▾ 이름', 접힘 '▸ 이름 · N장'.
+// groupLabel(theme, group, count) -> 묶음 이름 글자. 펼침 '이름'(상자 위 바깥), 접힘 '이름 · N장'(제목줄 안).
+// groupToggle(group, s) -> {glyph:'▾'|'▸', zone}. zone은 interaction.js의 접기 판정 영역과 같은
+//   상자 안 왼쪽 위 24×28 화면 px다. 글리프는 그 가운데에 그린다.
 // groupMembers(cards, groupId) -> 그 묶음에 든 카드.
 
 import { visibleCards } from './interaction.js';
-import { GROUP_TITLE_PX } from './layout.js';
+import { GROUP_TITLE_PX, GROUP_TOGGLE_PX } from './layout.js';
 
 // 매트 캡션에 쓰는 종류 이름. 이 밖의 종류는 캡션이 없다.
 export const CAPTION_WORDS = Object.freeze({ youtube: 'youtube', pinterest: 'pinterest', image: 'image', video: 'video' });
@@ -72,7 +74,12 @@ export function groupBox(group, s) {
 export function groupLabel(theme, group, count) {
   const name = String(group?.name ?? '');
   const shown = theme.groupLabelUpper ? name.toUpperCase() : name;
-  return group?.collapsed ? `▸ ${shown} · ${count}장` : `▾ ${shown}`;
+  return group?.collapsed ? `${shown} · ${count}장` : shown;
+}
+
+export function groupToggle(group, s) {
+  const zone = { x: s.x, y: s.y, w: Math.min(s.w, GROUP_TOGGLE_PX), h: Math.min(s.h, GROUP_TITLE_PX) };
+  return { glyph: group?.collapsed ? '▸' : '▾', zone, cx: zone.x + zone.w / 2, cy: zone.y + zone.h / 2 };
 }
 
 export function groupMembers(cards, groupId) {

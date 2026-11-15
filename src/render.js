@@ -13,13 +13,14 @@
 
 import { toScreen } from './layout.js';
 import { THEMES, groupDotColor } from './theme.js';
-import { drawList, cardChrome, groupBox, groupLabel, groupMembers } from './drawplan.js';
+import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle } from './drawplan.js';
 
 const ANIM_MS = 300;
 const HANDLE_PX = 12;
 const GROUP_LABEL_LEFT = 10; // 목업 left:10px
 const GROUP_DOT_PX = 7;
 const GROUP_DOT_GAP = 6;
+const GROUP_TOGGLE_FONT = '12px system-ui, -apple-system, sans-serif';
 const BADGE = { youtube: '▶', video: '🎞', pinterest: '📌', text: '✎', link: '🔗' };
 
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
@@ -175,6 +176,15 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     ctx.lineWidth = 1;
     ctx.strokeRect(box.x + 0.5, box.y + 0.5, Math.max(0, box.w - 1), Math.max(0, box.h - 1));
 
+    // 접기 글리프: interaction.js의 접기 판정 영역(상자 안 왼쪽 위 24×28) 가운데
+    const tg = groupToggle(group, box);
+    ctx.font = GROUP_TOGGLE_FONT;
+    ctx.fillStyle = th.groupLabelInk;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(tg.glyph, tg.cx, tg.cy);
+    ctx.textAlign = 'left';
+
     const label = groupLabel(th, group, members.length);
     ctx.font = th.groupLabelFont;
     setLetterSpacing(ctx, th.groupLabelSpacing ?? '0px');
@@ -182,7 +192,8 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     let x = box.x + GROUP_LABEL_LEFT;
     let y;
     if (group.collapsed) {
-      // 접힌 묶음: 제목줄 안에 쓴다.
+      // 접힌 묶음: 제목줄 안, 접기 영역 오른쪽에 쓴다.
+      x = tg.zone.x + tg.zone.w + 2;
       ctx.textBaseline = 'middle';
       y = box.y + box.h / 2;
     } else {
@@ -190,7 +201,8 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
       ctx.textBaseline = 'alphabetic';
       y = box.y - (th.groupLabelGap ?? 4);
     }
-    const maxW = Math.max(0, box.w - GROUP_LABEL_LEFT * 2);
+    const maxW = Math.max(0, box.x + box.w - GROUP_LABEL_LEFT - x);
+    const start = x;
     if (th.groupDot) {
       const cy = group.collapsed ? y : y - 4;
       ctx.beginPath();
@@ -200,7 +212,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
       ctx.fillStyle = th.groupLabelInk;
       x += GROUP_DOT_PX + GROUP_DOT_GAP;
     }
-    ctx.fillText(ellipsize(ctx, label, Math.max(0, maxW - (x - box.x - GROUP_LABEL_LEFT))), x, y);
+    ctx.fillText(ellipsize(ctx, label, Math.max(0, maxW - (x - start))), x, y);
     setLetterSpacing(ctx, '0px');
     ctx.restore();
   }
