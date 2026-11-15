@@ -369,3 +369,17 @@ test('GIF가 아니거나 썸네일이 없거나 gif 저장소가 없으면 gif�
   const r3 = await ingestFiles([file('a', 'x.GIF', '')], fakeDeps({ gifs: fakeThumbs() }));
   assert.equal(r3.cards[0].anim, true);
 });
+
+test('GIF 머리가 GIF_MAX_PIXELS를 넘는 크기를 말하면 정지 카드, gif 저장소에 넣지 않는다', async () => {
+  const head = (w, h) => Uint8Array.from([...Buffer.from('GIF89a'), w & 255, w >> 8, h & 255, h >> 8, 0, 0, 0, 0x3b]);
+  const gifs = fakeThumbs();
+  const deps = fakeDeps({ gifs, readBytes: async () => head(12000, 12000).buffer });
+  const { cards } = await ingestFiles([file('g', 'bomb.gif', 'image/gif', 14)], deps);
+  assert.equal(cards[0].hasThumb, true);
+  assert.equal('anim' in cards[0], false);
+  assert.equal(gifs.puts.length, 0);
+  // 2000×2000(딱 한도)은 움직인다
+  const deps2 = fakeDeps({ gifs: fakeThumbs(), readBytes: async () => head(2000, 2000).buffer });
+  const r2 = await ingestFiles([file('g', 'ok.gif', 'image/gif', 14)], deps2);
+  assert.equal(r2.cards[0].anim, true);
+});

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openGif, parseGif, lzwDecode, interlaceRows, gifDelayMs } from '../src/gifdecode.js';
+import { openGif, parseGif, lzwDecode, interlaceRows, gifDelayMs, gifSize, GIF_MAX_PIXELS } from '../src/gifdecode.js';
 
 // --- 손으로 만드는 작은 GIF ---
 
@@ -189,4 +189,81 @@ test('LZW: 긴 반복(KwKwK, 코드 크기 증가, 사전 가득 참)도 그대�
 test('깨진 입력: GIF가 아니거나 프레임이 없으면 던진다', () => {
   assert.throws(() => openGif(new Uint8Array([1, 2, 3])));
   assert.throws(() => openGif(new Uint8Array([...Buffer.from('GIF89a'), 1, 0, 1, 0, 0, 0, 0, 0x3b])));
+});
+
+// --- 크기 한도 ---
+
+// 머리만 있는 35바이트 GIF: 화면 W×H, 그림 하나(x,y,w,h), LZW 데이터는 clear+eoi뿐.
+function tinyGif(W, H, { x = 0, y = 0, w = W, h = H } = {}) {
+  return new Uint8Array([
+    ...Buffer.from('GIF89a'), ...u16(W), ...u16(H), 0x80, 0, 0, 0, 0, 0, 255, 255, 255,
+    0x2c, ...u16(x), ...u16(y), ...u16(w), ...u16(h), 0, 2, 2, 0x44, 0x01, 0, 0x3b,
+  ]);
+}
+
+test('gifSize: 머리의 가로·세로만 읽는다. GIF가 아니면 null', () => {
+  assert.deepEqual(gifSize(tinyGif(12000, 12000)), { width: 12000, height: 12000 });
+  assert.deepEqual(gifSize(new Uint8Array([...Buffer.from('GIF87a'), 3, 0, 2, 0]).buffer), { width: 3, height: 2 });
+  assert.equal(gifSize(new Uint8Array([1, 2, 3])), null);
+  assert.equal(gifSize(new Uint8Array([...Buffer.from('GIF89a'), 3, 0])), null);
+});
+
+test('화면이 GIF_MAX_PIXELS를 넘으면 openGif가 던진다(12000×12000을 만들지 않는다)', () => {
+  assert.equal(GIF_MAX_PIXELS, 4_000_000);
+  const bomb = tinyGif(12000, 12000);
+  assert.equal(bomb.length, 35);
+  assert.throws(() => parseGif(bomb), /너무 큽니다/);
+  assert.throws(() => openGif(bomb), /너무 큽니다/);
+  // 딱 한도면 연다
+  assert.equal(openGif(tinyGif(2000, 2000)).width, 2000);
+});
+
+test('그림 사각형이 화면보다 크면 던지고, 화면 밖으로 삐져나오면 잘라 그린다', () => {
+  // 1×1 화면에 65535×65535 그림: 색 번호 버퍼를 만들지 않고 던진다
+  assert.throws(() => openGif(tinyGif(1, 1, { w: 65535, h: 65535 })), /그림이 화면보다 큽니다/);
+  // 3×1 화면, x=2에 2×1 그림: 화면 안 한 픽셀만 그린다
+  const gif = makeGif({ w: 3, h: 1, global: [RED, GREEN], frames: [{ idx: [0, 0, 0] }, { x: 2, y: 0, w: 2, h: 1, idx: [1, 1] }] });
+  const g = openGif(gif);
+  const f = g.frameAt(1);
+  assert.equal(f.length, 3 * 4);
+  assert.deepEqual(px(f, 3, 1, 0), [255, 0, 0, 255]);
+  assert.deepEqual(px(f, 3, 2, 0), [0, 255, 0, 255]);
+});
+
+test('view(i): 같은 작업 버퍼를 돌려준다(다음 호출까지만 유효). frameAt은 새 배열', () => {
+  const W = 2, H = 1;
+  const g = openGif(makeGif({ w: W, h: H, global: [RED, BLUE], frames: [{ idx: [0, 0] }, { idx: [1, 1] }] }));
+  const v0 = g.view(0);
+  assert.deepEqual(px(v0, W, 0, 0), [255, 0, 0, 255]);
+  const v1 = g.view(1);
+  assert.equal(v1, v0);
+  assert.deepEqual(px(v1, W, 1, 0), [0, 0, 255, 255]);
+  const a = g.frameAt(0), b = g.frameAt(0);
+  assert.notEqual(a, b);
+  assert.notEqual(a, g.view(1));
+  assert.deepEqual(px(a, W, 0, 0), [255, 0, 0, 255]);
+});
+
+// --- 잘린 입력 ---
+
+test('잘린 GIF: 다 읽은 프레임까지만 쓴다. 한 프레임도 없으면 던진다', () => {
+  const W = 2, H = 1;
+  const full = makeGif({ w: W, h: H, global: [RED, BLUE], frames: [{ idx: [0, 0], delay: 7 }, { idx: [1, 1], delay: 9 }] });
+  // 끝 바이트(0x3b)를 떼고, 둘째 프레임 데이터 중간에서도 잘라 본다
+  for (const cut of [1, 3, 6, 12]) {
+    const g = openGif(full.subarray(0, full.length - cut));
+    assert.ok(g.count >= 1, `cut ${cut}`);
+    assert.deepEqual(px(g.frameAt(0), W, 0, 0), [255, 0, 0, 255]);
+  }
+  assert.equal(openGif(full.subarray(0, full.length - 1)).count, 2);
+  // 둘째 그림 머리(0x2c) 바로 뒤에서 자르면 첫 프레임만
+  const second = full.lastIndexOf(0x2c);
+  const g1 = openGif(full.subarray(0, second + 3));
+  assert.equal(g1.count, 1);
+  assert.deepEqual(g1.delays, [70]);
+  // 첫 프레임 데이터 도중에 자르면 프레임이 없어 던진다
+  const first = full.indexOf(0x2c);
+  assert.throws(() => openGif(full.subarray(0, first + 12)), /잘렸|프레임이 없습니다/);
+  // 팔레트가 잘려도 던진다
+  assert.throws(() => openGif(full.subarray(0, 15)));
 });

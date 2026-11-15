@@ -81,7 +81,8 @@ test('createGifPlayer: ImageDecoder가 없으면 직접 풀어 프레임을 넘�
   const gif = Buffer.from([...Buffer.from('GIF89a'), 2, 0, 1, 0, 0x80, 0, 0, 255, 0, 0, 0, 0, 255,
     ...frameBytes(0), ...frameBytes(1), 0x3b]);
   const saved = { ImageData: globalThis.ImageData, createImageBitmap: globalThis.createImageBitmap };
-  globalThis.ImageData = class { constructor(data, width, height) { Object.assign(this, { data, width, height }); } };
+  let made = 0;
+  globalThis.ImageData = class { constructor(data, width, height) { made++; Object.assign(this, { data, width, height }); } };
   globalThis.createImageBitmap = async (d) => ({ width: d.width, height: d.height, rgb: Array.from(d.data.subarray(0, 3)), close() {} });
   try {
     let frames = 0;
@@ -95,6 +96,8 @@ test('createGifPlayer: ImageDecoder가 없으면 직접 풀어 프레임을 넘�
     assert.deepEqual(player.frame({ id: 'g' }, 499).rgb, [255, 0, 0]);
     assert.deepEqual(player.frame({ id: 'g' }, 500).rgb, [0, 0, 255]);
     assert.equal(player.bytes, 2 * 2 * 1 * 4);
+    // 작업 버퍼를 감싼 ImageData 하나를 프레임마다 다시 쓴다(비트맵은 그때그때 복사)
+    assert.equal(made, 1);
     player.retain(new Set());
     assert.equal(player.bytes, 0);
   } finally {

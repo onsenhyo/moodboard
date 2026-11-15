@@ -12,7 +12,8 @@
 // 디코드: WebCodecs ImageDecoder가 있으면 프레임을 하나씩(지금 프레임의 다음 것만) 디코드해 ImageBitmap으로 모은다.
 // 모은 프레임이 budgetBytes(가로×세로×4로 잰다)를 넘으면 그 카드는 지금 프레임과 다음 프레임만 남긴다.
 // ImageDecoder가 없거나 GIF를 못 풀면(WKWebView) src/gifdecode.js로 직접 푼다. 같은 방식으로 프레임을 하나씩 겹쳐
-// RGBA로 받고 ImageBitmap(없으면 canvas)으로 만들어 같은 캐시와 예산에 넣는다.
+// RGBA로 받고 ImageBitmap(없으면 canvas)으로 만들어 같은 캐시와 예산에 넣는다. 화면이 디코더 한도
+// (gifdecode.js의 GIF_MAX_PIXELS)를 넘거나 그림이 화면보다 크면 openGif가 던져 아래 <img>로 넘어간다.
 // 그것도 실패하면 blob 주소의 <img>를 그린다. drawImage는 첫 프레임만 쓰므로 멈춘 채로 보인다.
 
 import { openGif } from './gifdecode.js';
@@ -89,6 +90,7 @@ export function createGifPlayer({
     e.dead = true;
     for (const f of e.frames ?? []) f?.bmp?.close?.();
     e.gif = null;
+    e.data = null;
     used -= e.bytes ?? 0;
     e.bytes = 0;
     try { e.decoder?.close(); } catch { /* 이미 닫힘 */ }
@@ -184,7 +186,11 @@ export function createGifPlayer({
 
   async function decodeJs(e, i) {
     const { gif } = e;
-    const data = new ImageData(gif.frameAt(i), gif.width, gif.height);
+    // view(i)는 늘 같은 작업 버퍼를 돌려주므로 그것을 감싼 ImageData 하나를 다시 쓴다. createImageBitmap과
+    // putImageData는 부를 때 픽셀을 복사하고, 이 카드는 한 번에 한 프레임만 디코드하므로(e.decoding) 안전하다.
+    const px = gif.view(i);
+    if (!e.data) e.data = new ImageData(px, gif.width, gif.height);
+    const data = e.data;
     let bmp;
     if (typeof createImageBitmap === 'function') {
       bmp = await createImageBitmap(data);

@@ -14,6 +14,7 @@
 import { newCard, TEXT_DEFAULT_COLOR } from './model.js';
 import { classifyInput } from './classify.js';
 import { dominantColor } from './color.js';
+import { gifSize, GIF_MAX_PIXELS } from './gifdecode.js';
 
 export const PLACEHOLDER_NOTE = '미리보기를 만들 수 없어요';
 export const PIN_SHORT_NOTE = '브라우저 주소창의 주소를 넣어 주세요';
@@ -94,9 +95,16 @@ function toBase64(bytes) {
   return btoa(s);
 }
 
+// 머리가 말하는 화면이 디코더 한도(GIF_MAX_PIXELS)를 넘으면 움직이지 않는다. 머리를 못 읽으면 막지 않는다
+// (보드에서 열지 못하면 정지 썸네일로 남는다).
+function gifTooBig(bytes) {
+  const size = gifSize(bytes);
+  return !!size && size.width * size.height > GIF_MAX_PIXELS;
+}
+
 // 작은 GIF의 원본을 gif 저장소에 넣는다. 넣었으면 참. 차거나 실패하면 정지 카드로 남긴다.
 async function putGif(deps, cardId, bytes) {
-  if (!deps.gifs || !bytes || bytes.byteLength > GIF_ANIM_MAX) return false;
+  if (!deps.gifs || !bytes || bytes.byteLength > GIF_ANIM_MAX || gifTooBig(bytes)) return false;
   try {
     const r = await deps.gifs.put(cardId, toBase64(bytes));
     return r?.error !== 'full';
