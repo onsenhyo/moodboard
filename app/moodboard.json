@@ -67,7 +67,9 @@
     "view": null,
     "mode": "manual",
     "cmd": null,
-    "paste_inbox": null
+    "paste_inbox": null,
+    "drop_inbox": null,
+    "drop_ack": null
   },
   "assets": [
     {
@@ -2265,7 +2267,9 @@
       "view",
       "mode",
       "cmd",
-      "paste_inbox"
+      "paste_inbox",
+      "drop_inbox",
+      "drop_ack"
     ],
     "storage_entries": [
       "boards",
@@ -2655,7 +2659,9 @@
               "view",
               "mode",
               "cmd",
-              "paste_inbox"
+              "paste_inbox",
+              "drop_inbox",
+              "drop_ack"
             ],
             "storage_entries": [
               "boards",

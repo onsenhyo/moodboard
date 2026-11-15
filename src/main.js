@@ -1,8 +1,8 @@
 // client 진입점. 플랫폼 핸들러를 순수 모듈에 잇는다.
 // 보드 그리기와 조작은 sandbox(board/board.js)가 맡는다. client는 넣기, 링크, blobs, 옆 칸, 내보내기,
 // 보드 관리를 맡고, 창 상태로 sandbox와 주고받는다.
-// - 읽기: selected {kind, id}|null, view {cx, cy, scale}, paste_inbox {text, n}
-// - 쓰기: board(지금 보드 id), mode, cmd {op, n}, selected(묶음 추가와 지우기)
+// - 읽기: selected {kind, id}|null, view {cx, cy, scale}, paste_inbox {text, n}, drop_inbox(보드에 끌어 놓은 파일 조각)
+// - 쓰기: board(지금 보드 id), mode, cmd {op, n}, selected(묶음 추가와 지우기), drop_ack
 
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
@@ -11,6 +11,7 @@ import { createDocEditor, cardTextPatch, MEMO_MAX } from './patches.js';
 import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
 import { placeNear } from './interaction.js';
+import { DROP_STATE, DROP_ACK, createReceiver, dropPlacement } from './dropxfer.js';
 import { THEMES, themeName } from './theme.js';
 import {
   normSelected, resolveSelected, deleteCardPatches, deleteGroupPatches, staleTombstones, viewCenter,
@@ -357,6 +358,33 @@ function onPasteState(v) {
   addText(v.text, false).catch((err) => setNotice(err?.message ?? '넣지 못했어요'));
 }
 
+// sandbox 보드에 Finder에서 끌어 놓은 파일(src/board/drop.js). 조각을 모아 blobs에 넣고 file_drop과 같은
+// 넣기를 돌린다. 카드는 놓은 자리에 놓는다. 창을 다시 열 때 남은 값은 받지 않는다.
+const dropRx = createReceiver({ initial: p.getState(DROP_STATE) });
+let dropAckSent = '';
+function onDropState(v) {
+  const r = dropRx.receive(v);
+  if (!r) return;
+  const json = JSON.stringify(r.ack);
+  if (json !== dropAckSent) { dropAckSent = json; p.setState(DROP_ACK, r.ack); }
+  if (r.file) ingestDropped(r.file).catch((err) => setNotice(err?.message ?? '넣지 못했어요'));
+}
+
+async function ingestDropped(f) {
+  const file = { id: `drop:${f.batch}:${f.index}`, name: f.name, mime: f.mime, size: f.bytes.length };
+  await ready.run(async () => {
+    const deps = {
+      ...ingestDeps(),
+      // blobs.put은 버퍼를 transfer하므로 읽기와 넣기에 따로 복사본을 준다.
+      readBytes: async () => f.bytes.slice().buffer,
+      blobPut: (key) => p.blobs.putBytes(key, f.bytes.slice()),
+      placeAt: () => dropPlacement({ x: f.x, y: f.y }, f.index),
+    };
+    const { cards, full } = await ingestFiles([file], deps);
+    addCards(cards, full);
+  });
+}
+
 function setMode(next) {
   if (mode === next) return;
   mode = next;
@@ -632,6 +660,7 @@ p.onSurface(PREVIEW_SURFACE, (surface) => preview.attach(surface));
 p.onState((state) => {
   onSelectedState(state.selected);
   onPasteState(state.paste_inbox);
+  onDropState(state[DROP_STATE]);
 });
 
 // 창을 닫을 때 쉘은 closing 리스너가 돌려준 promise와 이미 보낸 setStorage를 기다린다.

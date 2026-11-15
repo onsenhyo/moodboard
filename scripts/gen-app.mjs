@@ -186,7 +186,8 @@ const actions = [
 
 // --- 창 상태 ---
 // board(client가 씀), mode·cmd(툴바 → client가 씀), selected(보드가 쓰고 client도 씀), view·paste_inbox(보드가 씀).
-const BOARD_STATE = ['board', 'selected', 'view', 'mode', 'cmd', 'paste_inbox'];
+// drop_inbox(보드가 씀, 끌어 놓은 파일 조각)와 drop_ack(client가 씀): src/dropxfer.js.
+const BOARD_STATE = ['board', 'selected', 'view', 'mode', 'cmd', 'paste_inbox', 'drop_inbox', 'drop_ack'];
 
 // --- 화면 ---
 
@@ -356,7 +357,7 @@ const app = {
   ],
   state: {
     draft: '', board_name: '', board: null, yt_embed: null, rename_open: false, group_name: '', theme: 'light',
-    selected: null, view: null, mode: 'manual', cmd: null, paste_inbox: null,
+    selected: null, view: null, mode: 'manual', cmd: null, paste_inbox: null, drop_inbox: null, drop_ack: null,
   },
   assets: ASSETS,
   storage: { entries: [boardsEntry, ...thumbEntries] },

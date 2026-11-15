@@ -18,6 +18,8 @@ export function createPlatform(client) {
     },
     blobs: {
       put: (key, fileId) => client.blobs.put({ key, file_id: fileId }),
+      // 바이트로 넣기(보드에 끌어 놓은 파일). bytes는 transfer되므로 넘긴 뒤 쓰지 않는다.
+      putBytes: (key, bytes) => client.blobs.put({ key, bytes: exactBuffer(bytes) }),
       open: (key) => client.blobs.open({ key }),
       remove: (key) => client.blobs.remove({ key }),
       async has(key) {
