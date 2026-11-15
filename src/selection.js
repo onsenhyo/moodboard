@@ -9,6 +9,10 @@
 // staleTombstones(doc, now, minAgeMs) -> card[]: 지운 지 7일(기본) 넘은 카드 묘비.
 // collectCard(card, {thumbs, gifs, blobs}) -> Promise[]: 묘비 카드 하나의 썸네일, 움직이는 GIF, 원본을 걷는다.
 // viewCenter(view) -> {x, y}: 창 상태 view {cx, cy, scale}의 가운데. 없으면 기본 자리.
+// pickBoard(doc, wantedId, currentId) -> board|null: 넣기를 받을 때 고른 보드. 그 사이 지워졌으면 지금 보드.
+// orphanMedia({doc, patches, thumbs, gifs, blobKeys, now, minAgeMs}) -> {thumbs, gifs, blobs}: 문서에 카드가 없는
+//   썸네일·GIF(카드 id)와 원본(blobs 키). 묘비를 30일 뒤 걷으면(store.js pruneTombstones) 걷기 전에 collectCard를
+//   못 돌린 카드의 저장 공간이 남는다. 그것을 한 세션에 한 번 걷는다(main.js reconcileMedia).
 
 export const DEFAULT_CENTER = Object.freeze({ x: 480, y: 300 });
 
@@ -80,4 +84,37 @@ export function viewCenter(view) {
     return { x: view.cx, y: view.cy, scale: view.scale };
   }
   return { ...DEFAULT_CENTER, scale: 1 };
+}
+
+export function pickBoard(doc, wantedId, currentId) {
+  const boards = live(doc?.boards);
+  return boards.find((b) => b.id === wantedId) ?? boards.find((b) => b.id === currentId) ?? null;
+}
+
+// 묘비든 지운 보드의 카드든 문서에 남아 있는 카드는 지우지 않는다(묘비는 collectCard가 7일 뒤 걷는다).
+// 줄의 패치(아직 저장하지 않은 새 카드)도 쓰는 것으로 친다.
+// 썸네일과 GIF는 writtenAt(thumbs, gifs: Map<cardId, writtenAtMs>)이 minAgeMs보다 오래된 것만 고른다.
+// 다른 PC는 shard를 먼저 쓰고 boards를 나중에 쓰므로, 막 쓴 사본은 문서에 아직 카드가 없을 수 있다.
+// 원본(blobs)은 이 PC의 것이라 시각이 없다. 넣는 중에는 부르지 않는다(main.js). 키는 orig/<cardId>.<ext>.
+// doc 모양이 틀리면(읽지 못한 문서) 아무것도 고르지 않는다.
+export const ORIG_PREFIX = 'orig/';
+export function orphanMedia({ doc, patches = [], thumbs = new Map(), gifs = new Map(), blobKeys = [], now, minAgeMs = GC_AGE_MS } = {}) {
+  const none = { thumbs: [], gifs: [], blobs: [] };
+  if (!doc || !Array.isArray(doc.boards) || !Number.isFinite(now)) return none;
+  const known = new Set();
+  for (const b of doc.boards) for (const c of b?.cards ?? []) if (c?.id) known.add(c.id);
+  for (const p of patches) if (p?.kind === 'card' && p.id) known.add(p.id);
+  const old = (t) => Number.isFinite(t) && now - t >= minAgeMs;
+  const pickIds = (m) => [...m].filter(([id, t]) => !known.has(id) && old(t)).map(([id]) => id);
+  const cardOfKey = (key) => {
+    const name = key.slice(ORIG_PREFIX.length);
+    const dot = name.indexOf('.');
+    return dot < 0 ? name : name.slice(0, dot);
+  };
+  return {
+    thumbs: pickIds(thumbs),
+    gifs: pickIds(gifs),
+    blobs: blobKeys.filter((k) => typeof k === 'string' && k.startsWith(ORIG_PREFIX) && k.length > ORIG_PREFIX.length
+      && !known.has(cardOfKey(k))),
+  };
 }

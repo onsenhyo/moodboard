@@ -7,7 +7,7 @@
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
 import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore } from './store.js';
-import { createDocEditor, cardTextPatch, MEMO_MAX } from './patches.js';
+import { createDocEditor, cardTextPatch, clipText, MEMO_MAX, LABEL_MAX, TEXT_MAX } from './patches.js';
 import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
 import { placeNear } from './interaction.js';
@@ -15,6 +15,7 @@ import { DROP_STATE, DROP_ACK, createReceiver, dropPlacement } from './dropxfer.
 import { THEMES, themeName } from './theme.js';
 import {
   normSelected, resolveSelected, deleteCardPatches, deleteGroupPatches, staleTombstones, viewCenter, collectCard,
+  pickBoard, orphanMedia, ORIG_PREFIX,
 } from './selection.js';
 import { createGate, retryRead, createSaver } from './startup.js';
 import { panelOutputs, MEMO_KINDS, boardOutputs } from './panel.js';
@@ -104,13 +105,19 @@ function touchBoard(fields, deleteKeys) {
 
 // 저장은 한 줄로 세운다. 창을 닫을 때 saver.flush()가 남은 저장을 끝낸다.
 // 저장은 새로 읽은 값에 쌓인 패치를 적용해 쓴다. 다른 프레임(sandbox)이 고친 필드를 덮지 않는다.
+// 저장 한도(1MiB)를 넘게 만들었거나 저장소가 받지 않는 편집은 ed.save가 버리고 알린다(err.dropped).
+// 버린 편집은 화면 문서에서도 빠지므로 실패해도 출력을 다시 맞춘다.
 const saver = createSaver(async () => {
-  await ed.save();
-  refresh();
+  try {
+    await ed.save();
+  } finally {
+    refresh();
+  }
 }, {
   // 패치는 쓰기가 성공할 때까지 줄에 남는다. 실패하면 조금 뒤 다시 저장한다.
   onError: (err) => {
     setNotice(err?.message ?? '저장하지 못했어요');
+    if (err?.dropped && (selectedId || selectedGroupId)) publishSelected();
     if (ed.pending) saver.schedule(3000);
   },
 });
@@ -279,6 +286,31 @@ function collectGarbage() {
     // 공간 정리는 실패해도 괜찮다.
     collectCard(c, { thumbs, gifs, blobs: p.blobs });
   }
+  reconcileMedia();
+}
+
+// 문서에 카드가 아예 없는(묘비까지 걷힌) 카드의 썸네일, GIF, 원본을 걷는다(selection.js orphanMedia).
+// boards와 썸네일·GIF shard를 모두 읽었고 원본 목록도 읽었을 때만, 세션에 한 번 돈다. 넣는 중(ingesting)에는
+// 원본과 썸네일을 먼저 쓰고 카드를 나중에 넣으므로 돌지 않는다(다음 collectGarbage에서 다시 본다).
+let reconciled = false;
+let ingesting = 0;
+async function reconcileMedia() {
+  if (reconciled || ingesting || !loaded || !thumbs || !gifs) return;
+  if (thumbs.missing().length || gifs.missing().length) return;
+  reconciled = true;
+  let blobKeys;
+  try {
+    blobKeys = await p.blobs.list(ORIG_PREFIX);
+  } catch {
+    return; // 목록을 못 읽었으면 이번 세션은 걷지 않는다
+  }
+  if (!Array.isArray(blobKeys)) return;
+  if (ingesting) { reconciled = false; return; } // 목록을 읽는 동안 넣기가 시작됐다
+  const r = orphanMedia({ doc: ed.doc, thumbs: thumbs.stamps(), gifs: gifs.stamps(), blobKeys, now: Date.now() });
+  const quiet = (fn) => { try { Promise.resolve(fn()).catch(() => {}); } catch { /* 다음 세션에 다시 걷는다 */ } };
+  for (const id of r.thumbs) quiet(() => thumbs.remove(id));
+  for (const id of r.gifs) quiet(() => gifs.remove(id));
+  for (const key of r.blobs) quiet(() => p.blobs.remove(key));
 }
 
 // 고른 것이 지워졌거나 다른 보드의 것이면 참. 아직 모르는 id(다른 PC에서 막 온 카드)는 남긴다.
@@ -315,8 +347,9 @@ function ingestDeps() {
   };
 }
 
-function addCards(cards, full) {
-  const b = board();
+// 카드는 넣기를 받을 때의 보드(targetId)에 넣는다. 그 사이 그 보드가 지워졌으면 지금 보드에 넣는다.
+function addCards(cards, full, targetId = boardId) {
+  const b = pickBoard(ed.doc, targetId, boardId);
   if (b && cards.length) {
     ed.edit(cards.map((c) => ({ kind: 'card', boardId: b.id, id: c.id, insert: c, t: c.updatedAt })));
     refresh();
@@ -326,15 +359,22 @@ function addCards(cards, full) {
   else if (cards.length) clearNotice();
 }
 
-// 넣기 동작은 시작이 끝날 때까지 기다렸다가 순서대로 실행한다.
+// 넣는 동안 ingesting을 센다(reconcileMedia가 막 쓴 원본과 썸네일을 걷지 않게).
+async function whileIngesting(fn) {
+  ingesting++;
+  try { return await fn(); } finally { ingesting--; }
+}
+
+// 넣기 동작은 시작이 끝날 때까지 기다렸다가 순서대로 실행한다. 받을 때의 보드에 넣는다.
 async function onFiles({ event } = {}) {
   if (!event || event.cancelled) return;
   const files = Array.isArray(event.files) ? event.files : [];
   if (!files.length) return;
-  await ready.run(async () => {
+  const target = boardId;
+  await ready.run(() => whileIngesting(async () => {
     const { cards, full } = await ingestFiles(files, ingestDeps());
-    addCards(cards, full);
-  });
+    addCards(cards, full, target);
+  }));
 }
 
 // --- 동작 ---
@@ -342,13 +382,16 @@ async function onFiles({ event } = {}) {
 p.handle('drop', onFiles);
 p.handle('pick', onFiles);
 
+// 글 카드 본문은 TEXT_MAX자까지(링크는 그보다 훨씬 짧다).
 async function addText(raw, clearDraft) {
   if (typeof raw !== 'string' || !raw.trim()) return;
-  await ready.run(async () => {
-    const { card, full } = await ingestText(raw, ingestDeps());
-    addCards(card ? [card] : [], full);
+  const text = clipText(raw, TEXT_MAX);
+  const target = boardId;
+  await ready.run(() => whileIngesting(async () => {
+    const { card, full } = await ingestText(text, ingestDeps());
+    addCards(card ? [card] : [], full, target);
     if (card && clearDraft) p.setState('draft', '');
-  });
+  }));
 }
 
 p.handle('add_text', ({ event } = {}) => addText(typeof event === 'string' ? event : p.getState('draft'), true));
@@ -362,7 +405,8 @@ function onPasteState(v) {
 }
 
 // sandbox 보드에 Finder에서 끌어 놓은 파일(src/board/drop.js). 조각을 모아 blobs에 넣고 file_drop과 같은
-// 넣기를 돌린다. 카드는 놓은 자리에 놓는다. 창을 다시 열 때 남은 값은 받지 않는다.
+// 넣기를 돌린다. 카드는 놓은 자리에, 파일을 다 받았을 때 보드(창 상태 board)가 보이던 보드에 놓는다.
+// 창을 다시 열 때 남은 값은 받지 않는다.
 const dropRx = createReceiver({ initial: p.getState(DROP_STATE) });
 let dropAckSent = '';
 function onDropState(v) {
@@ -370,12 +414,16 @@ function onDropState(v) {
   if (!r) return;
   const json = JSON.stringify(r.ack);
   if (json !== dropAckSent) { dropAckSent = json; p.setState(DROP_ACK, r.ack); }
-  if (r.file) ingestDropped(r.file).catch((err) => setNotice(err?.message ?? '넣지 못했어요'));
+  if (r.file) {
+    const shown = p.getState('board');
+    const target = typeof shown === 'string' ? shown : boardId;
+    ingestDropped(r.file, target).catch((err) => setNotice(err?.message ?? '넣지 못했어요'));
+  }
 }
 
-async function ingestDropped(f) {
+async function ingestDropped(f, target) {
   const file = { id: `drop:${f.batch}:${f.index}`, name: f.name, mime: f.mime, size: f.bytes.length };
-  await ready.run(async () => {
+  await ready.run(() => whileIngesting(async () => {
     const deps = {
       ...ingestDeps(),
       // blobs.put은 버퍼를 transfer하므로 읽기와 넣기에 따로 복사본을 준다.
@@ -384,8 +432,8 @@ async function ingestDropped(f) {
       placeAt: () => dropPlacement({ x: f.x, y: f.y }, f.index),
     };
     const { cards, full } = await ingestFiles([file], deps);
-    addCards(cards, full);
-  });
+    addCards(cards, full, target);
+  }));
 }
 
 function setMode(next) {
@@ -506,18 +554,20 @@ p.handle('reset_text_paper', () => {
   if (c && 'paper' in c) setTextPaper(null);
 });
 
+// 글 카드 본문은 TEXT_MAX자(code point)까지 자른다(boards 한 항목에 1MiB까지).
 p.handle('set_text', ({ event } = {}) => {
   const c = cardById(selectedId);
   if (!c || c.kind !== 'text' || typeof event !== 'string') return;
-  const first = event.split(/\r?\n/)[0];
-  touchCard(c.id, { text: event, title: [...first].slice(0, 40).join('') });
+  const text = clipText(event, TEXT_MAX);
+  const first = text.split(/\r?\n/)[0];
+  touchCard(c.id, { text, title: [...first].slice(0, 40).join('') });
   refresh();
   scheduleSave();
   publishSelected();
   clearNotice();
 });
 
-// 카드 이름(label)과 메모(memo). 빈 값이면 키를 지운다. 이름은 Enter, 메모는 입력칸을 떠날 때 온다.
+// 카드 이름(label, LABEL_MAX자)과 메모(memo, MEMO_MAX자). 빈 값이면 키를 지운다. 이름은 Enter, 메모는 입력칸을 떠날 때 온다.
 function setCardText(field, event, max) {
   const c = cardById(selectedId);
   if (!c || typeof event !== 'string' || (field === 'memo' && !MEMO_KINDS.has(c.kind))) return;
@@ -531,7 +581,7 @@ function setCardText(field, event, max) {
   clearNotice();
 }
 
-p.handle('set_card_label', ({ event } = {}) => setCardText('label', event));
+p.handle('set_card_label', ({ event } = {}) => setCardText('label', event, LABEL_MAX));
 p.handle('set_card_memo', ({ event } = {}) => setCardText('memo', event, MEMO_MAX));
 
 // [자르기]: 보드(sandbox)가 crop_target의 n이 바뀌면 그 카드의 자르기 화면을 연다.
@@ -782,12 +832,13 @@ async function startGifs() {
   await Promise.all(gifs.missing().map((id) => retryRead(() => p.storage.get(id), {
     stop: () => !gifs.missing().includes(id),
   }).then((r) => { if (!r.stopped) gifs.reload(id, r.value); })));
+  reconcileMedia(); // 못 읽은 GIF shard를 다 읽었다
 }
 
 let retrying = false;
 function updateLoading() {
   const done = loaded && thumbs && thumbs.missing().length === 0;
-  if (done) setLoadingNotice(null);
+  if (done) { setLoadingNotice(null); reconcileMedia(); }
   else setLoadingNotice(retrying ? RETRYING_NOTICE : LOADING_NOTICE);
   if (loaded && thumbs) ready.open();
 }

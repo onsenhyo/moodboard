@@ -678,3 +678,9 @@ test('packThumbs: idOf로 shard id를 만든다', () => {
   const r = packThumbs(new Map(), { cardId: 'x', b64: 'AA' }, { shards: 3, idOf: (i) => 'gifs_' + i });
   assert.deepEqual(r, { shardId: 'gifs_0' });
 });
+
+test('ThumbStore.stamps: 카드마다 이기는 사본의 writtenAt', async () => {
+  const a = fakeAdapter({ thumbs_000: { a: '5:AAA', b: 'BBB' }, thumbs_001: { a: '9:AAA2' } });
+  const s = await createThumbStore(a, { shards: 2 });
+  assert.deepEqual([...s.stamps()].sort(), [['a', 9], ['b', 0]]);
+});

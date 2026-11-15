@@ -130,3 +130,43 @@ test('collectCard: 썸네일, 움직이는 GIF, 원본을 걷고 실패는 삼�
   // 동기적으로 던져도 괜찮다
   assert.doesNotThrow(() => collectCard({ id: 'c3', hasThumb: true }, { thumbs: { remove() { throw new Error('y'); } } }));
 });
+
+// --- pickBoard: 넣을 보드 ---
+
+import { pickBoard, orphanMedia } from '../src/selection.js';
+
+test('pickBoard: 받을 때의 보드, 지워졌거나 없으면 지금 보드', () => {
+  const doc = { boards: [{ id: 'a', cards: [] }, { id: 'b', cards: [] }, { id: 'gone', deleted: true, cards: [] }] };
+  assert.equal(pickBoard(doc, 'b', 'a').id, 'b');
+  assert.equal(pickBoard(doc, 'gone', 'a').id, 'a');
+  assert.equal(pickBoard(doc, 'nope', 'a').id, 'a');
+  assert.equal(pickBoard(doc, null, 'a').id, 'a');
+  assert.equal(pickBoard(doc, 'nope', 'gone'), null);
+  assert.equal(pickBoard(null, 'a', 'a'), null);
+});
+
+// --- orphanMedia: 카드가 없는 썸네일, GIF, 원본 ---
+
+test('orphanMedia: 문서와 줄의 패치 어디에도 없는 카드의 썸네일·GIF·원본만, 오래된 것만', () => {
+  const now = 100 * GC_AGE_MS;
+  const old = now - GC_AGE_MS;
+  const doc = { boards: [
+    { id: 'b', cards: [{ id: 'live' }, { id: 'tomb', deleted: true }] },
+    { id: 'gone', deleted: true, cards: [{ id: 'inGoneBoard' }] },
+  ] };
+  const patches = [{ kind: 'card', boardId: 'b', id: 'pending', insert: { id: 'pending' } }];
+  const thumbs = new Map([['live', old], ['tomb', old], ['inGoneBoard', old], ['pending', old], ['orphan', old], ['fresh', now - 1], ['legacy', 0]]);
+  const gifs = new Map([['live', old], ['orphan2', old]]);
+  const blobKeys = ['orig/live.jpg', 'orig/tomb.png', 'orig/pending.gif', 'orig/orphan.jpg', 'orig/noext', 'other/x.jpg'];
+  const r = orphanMedia({ doc, patches, thumbs, gifs, blobKeys, now });
+  assert.deepEqual(r.thumbs.sort(), ['legacy', 'orphan']);
+  assert.deepEqual(r.gifs, ['orphan2']);
+  assert.deepEqual(r.blobs.sort(), ['orig/noext', 'orig/orphan.jpg']);
+});
+
+test('orphanMedia: 문서가 없거나 모양이 틀리면 아무것도 지우지 않는다', () => {
+  const thumbs = new Map([['a', 0]]);
+  for (const doc of [null, undefined, {}, { boards: 'x' }]) {
+    assert.deepEqual(orphanMedia({ doc, thumbs, gifs: thumbs, blobKeys: ['orig/a.jpg'], now: GC_AGE_MS * 10 }), { thumbs: [], gifs: [], blobs: [] });
+  }
+});

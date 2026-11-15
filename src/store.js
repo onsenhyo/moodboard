@@ -178,6 +178,7 @@ export const stampThumb = (t, b64) => `${t}:${b64}`;
 //   세션 기억 없이 저장된 값만으로 정해지므로 재시작한 창이나 다른 PC도 같은 사본을 고른다.
 // - 진 사본은 그 shard를 다음에 성공적으로 쓸 때 걷어낸다. put과 remove는 그 카드의 모든 사본을 정리한다.
 // - reload(shardId, value)는 다른 PC의 변경을 받아 그 shard의 캐시와, 그 shard에 걸린 카드의 색인만 다시 만든다.
+// - stamps()는 cardId -> 이기는 사본의 writtenAt(Map). 문서에 없는 카드의 사본을 고를 때 쓴다(selection.js orphanMedia).
 // - 시작할 때 읽지 못한 shard는 missing()에 남는다. 그 shard는 reload로 값을 받을 때까지 새 썸네일을 받지 않는다.
 //   읽은 shard가 모두 찼는데 못 읽은 shard가 남아 있으면 put은 {error:'full'} 대신 'thumbs loading' 오류를 던진다.
 export async function createThumbStore(adapter, {
@@ -324,5 +325,10 @@ export async function createThumbStore(adapter, {
       if (ids.includes(shardId)) load(shardId, value);
     },
     missing: () => [...unloaded],
+    stamps() {
+      const out = new Map();
+      for (const [cardId, id] of index) out.set(cardId, stampIn(id, cardId));
+      return out;
+    },
   };
 }
