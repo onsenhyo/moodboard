@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle, CAPTION_WORDS } from '../src/drawplan.js';
+import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle, CAPTION_WORDS, captionFor } from '../src/drawplan.js';
 import { hitTestGroup, toWorld, GROUP_TOGGLE_PX, GROUP_TITLE_PX } from '../src/layout.js';
 import { THEMES } from '../src/theme.js';
 
@@ -44,9 +44,20 @@ test('drawList: 선택선은 맨 끝에 그린다(카드 또는 묶음)', () => 
   assert.equal(drawList(scene({ selectedGroupId: 'g3' })).at(-1).kind, 'card');
 });
 
-test('cardChrome: 라이트 사진 카드는 얇은 흰 매트(4, 아래 4)이고 캡션 줄이 없다, 그림자 2겹', () => {
+test('captionFor: image는 캡션이 없고 youtube·pinterest·video만 종류 이름', () => {
+  assert.equal(captionFor({ kind: 'image' }), null);
+  assert.equal(captionFor({ kind: 'youtube' }), 'youtube');
+  assert.equal(captionFor({ kind: 'pinterest' }), 'pinterest');
+  assert.equal(captionFor({ kind: 'video' }), 'video');
+  assert.equal(captionFor({ kind: 'link' }), null);
+  assert.equal(captionFor({ kind: 'text' }), null);
+  assert.equal(captionFor(null), null);
+  assert.deepEqual(Object.keys(CAPTION_WORDS).sort(), ['pinterest', 'video', 'youtube']);
+});
+
+test('cardChrome: 라이트 image 카드는 사방 4px 매트이고 캡션이 없다, 그림자 2겹', () => {
   const s = rect(10, 20, 200, 150);
-  const c = cardChrome(THEMES.light, card('a', { kind: 'youtube' }), s, 1);
+  const c = cardChrome(THEMES.light, card('a', { kind: 'image' }), s, 1);
   assert.deepEqual(c.outer, s);
   assert.deepEqual(c.inner, { x: 14, y: 24, w: 192, h: 142 });
   assert.equal(c.matBg, '#ffffff');
@@ -55,14 +66,25 @@ test('cardChrome: 라이트 사진 카드는 얇은 흰 매트(4, 아래 4)이�
   assert.deepEqual(c.badgeAt, { x: 20, y: 30 });
 });
 
-test('cardChrome: 매트는 배율을 따른다', () => {
+test('cardChrome: 라이트 youtube·pinterest·video 카드는 아래 20px에 캡션', () => {
+  const s = rect(10, 20, 200, 150);
+  for (const kind of ['youtube', 'pinterest', 'video']) {
+    const c = cardChrome(THEMES.light, card('a', { kind }), s, 1);
+    assert.deepEqual(c.inner, { x: 14, y: 24, w: 192, h: 126 }, kind);
+    assert.deepEqual(c.caption, { text: kind, x: 16, y: 165 }, kind);
+  }
+});
+
+test('cardChrome: 매트는 배율을 따르고, 아랫단이 얇으면 캡션을 쓰지 않는다', () => {
   const c = cardChrome(THEMES.light, card('a'), rect(0, 0, 100, 75), 0.5);
   assert.deepEqual(c.inner, { x: 2, y: 2, w: 96, h: 71 });
   assert.equal(c.caption, null);
+  const y = cardChrome(THEMES.light, card('a', { kind: 'youtube' }), rect(0, 0, 100, 75), 0.5);
+  assert.deepEqual(y.inner, { x: 2, y: 2, w: 96, h: 63 });
+  assert.equal(y.caption, null, '10px 아랫단에는 글자를 쓰지 않는다');
 });
 
-test('cardChrome: 캡션 단어는 youtube/pinterest/image/video뿐이다', () => {
-  assert.deepEqual(Object.keys(CAPTION_WORDS).sort(), ['image', 'pinterest', 'video', 'youtube']);
+test('cardChrome: 링크 카드는 캡션이 없다', () => {
   const link = cardChrome(THEMES.light, card('a', { kind: 'link' }), rect(0, 0, 200, 150));
   assert.equal(link.caption, null);
   assert.ok(link.matBg);

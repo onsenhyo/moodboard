@@ -2,7 +2,9 @@
 //
 // drawList(scene) -> [{kind:'background'} | {kind:'group', id} | {kind:'card', id} | {kind:'selection', target:'card'|'group', id}]
 //   그리는 순서: 바탕 → 살아 있는 묶음(수동 배치에서만) → visibleCards → 선택선.
+// captionFor(card) -> 'youtube'|'pinterest'|'video'|null. image는 캡션이 없다.
 // cardChrome(theme, card, s, scale) -> {outer, inner, matBg, caption, badgeAt, shadows}
+//   라이트 매트는 사방 pad이고, 캡션을 쓰는 종류만 아래가 captionBottom이다.
 //   s는 카드의 화면 rect. 사진 카드(hasThumb)는 라이트에서 흰 매트 안쪽(inner)에 그림을 그린다.
 // groupBox(group, s) -> 묶음의 화면 상자. 접힌 묶음은 28px 제목줄만.
 // groupLabel(theme, group, count) -> 묶음 이름 글자. 펼침 '이름'(상자 위 바깥), 접힘 '이름 · N장'(제목줄 안).
@@ -13,8 +15,9 @@
 import { visibleCards } from './interaction.js';
 import { GROUP_TITLE_PX, GROUP_TOGGLE_PX } from './layout.js';
 
-// 매트 캡션에 쓰는 종류 이름. 이 밖의 종류는 캡션이 없다.
-export const CAPTION_WORDS = Object.freeze({ youtube: 'youtube', pinterest: 'pinterest', image: 'image', video: 'video' });
+// 매트 캡션에 쓰는 종류 이름. 이 밖의 종류(image 포함)는 캡션이 없다.
+export const CAPTION_WORDS = Object.freeze({ youtube: 'youtube', pinterest: 'pinterest', video: 'video' });
+export const captionFor = (card) => (card && Object.hasOwn(CAPTION_WORDS, card.kind) ? CAPTION_WORDS[card.kind] : null);
 
 const BADGE_INSET = 6;
 const CAPTION_LEFT = 2; // 매트 안쪽 왼쪽에서 더 들어가는 거리(목업 left:8 = pad 6 + 2)
@@ -50,10 +53,10 @@ export function cardChrome(theme, card, s, scale = 1) {
   };
   if (!photo || !theme.mat) return base;
   const pad = theme.mat.pad * scale;
-  const bottom = theme.mat.bottom * scale;
+  const word = captionFor(card);
+  const bottom = (word ? theme.mat.captionBottom ?? theme.mat.bottom : theme.mat.bottom) * scale;
   const inner = { x: s.x + pad, y: s.y + pad, w: s.w - pad * 2, h: s.h - pad - bottom };
   if (inner.w < 1 || inner.h < 1) return base; // 너무 작으면 매트 없이 꽉 채운다
-  const word = CAPTION_WORDS[card.kind] ?? null;
   const caption = word && bottom >= CAPTION_MIN_PX
     ? { text: word, x: inner.x + CAPTION_LEFT * scale, y: s.y + s.h - CAPTION_BOTTOM * scale }
     : null;

@@ -3,6 +3,12 @@
 // THEMES = {light, dark}: 쉘 팔레트에 맞춘 값(스펙 2026-11-15 수정). 글꼴은 ctx.font에 바로 넣을 수 있는 CSS 문자열이다.
 // themeName(isDark) -> 'light'|'dark'
 // groupDotColor(cards) -> '#rrggbb': 채도 있는 카드 색의 hue 중앙값을 HSL(h, .55, .55)로 바꾼 값.
+// luminance('#rrggbb') -> 0..1 | null: WCAG 상대 밝기.
+// inkFor(paper) -> 글자색. 대비가 더 큰 쪽(어두운 종이 #ece3f2, 밝은 종이 #302a36).
+// gridFor(bg) -> 점 격자 색. 밝기 0.5 초과면 검정 8%, 아니면 흰색 10%.
+// boardTheme(theme, bg) -> 보드 bg를 반영한 테마(바탕, 격자, 묶음 상자와 이름). bg가 없으면 theme 그대로.
+//   surfaceSolid는 테마 값 그대로 남아 내보낸 페이지의 위 막대 같은 창 부분에 쓴다.
+// paperFor(theme, card) -> {bg, ink}: 글 카드의 종이와 글자색. paper가 없으면 테마 textBg, textInk.
 
 import { colorSortKey } from './color.js';
 
@@ -34,7 +40,7 @@ function make(k, o) {
     matBg: o.mat ? '#ffffff' : null,
     shadow: o.shadow,
     captionFont: `11px ${UI}`,
-    captionColor: null, // 캡션 줄은 없다
+    captionColor: o.mat ? k.muted : null, // 라이트 매트 아랫단에만 쓴다
     badgeBg: k.surfaceRaised,
     badgeInk: k.text,
     badgeFont: `600 10px ${UI}`,
@@ -79,7 +85,8 @@ function make(k, o) {
 }
 
 const light = make(SHELL.light, {
-  mat: { pad: 4, bottom: 4 },
+  // 아래 4px가 기본이고, 캡션을 쓰는 종류(drawplan.js captionFor)는 아래 captionBottom.
+  mat: { pad: 4, bottom: 4, captionBottom: 20 },
   shadow: [
     { blur: 12, y: 4, color: 'rgba(48,42,54,.10)' },
     { blur: 2, y: 1, color: 'rgba(48,42,54,.06)' },
@@ -133,4 +140,57 @@ export function groupDotColor(cards) {
   if (!hues.length) return GRAY;
   hues.sort((a, b) => a - b);
   return hslToHex(hues[(hues.length - 1) >> 1], 0.55, 0.55);
+}
+
+// --- 보드 배경과 글 카드 종이 ---
+
+const HEX6 = /^#[0-9a-f]{6}$/i;
+const LIGHT_INK = SHELL.dark.text; // #ece3f2
+const DARK_INK = SHELL.light.text; // #302a36
+export const GRID_ON_LIGHT = 'rgba(0,0,0,.08)';
+export const GRID_ON_DARK = 'rgba(255,255,255,.10)';
+
+export const isHex = (v) => typeof v === 'string' && HEX6.test(v);
+
+export function luminance(hex) {
+  if (!isHex(hex)) return null;
+  const ch = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+
+const contrast = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+
+export function inkFor(paper) {
+  const l = luminance(paper);
+  if (l == null) return DARK_INK;
+  return contrast(l, luminance(LIGHT_INK)) > contrast(l, luminance(DARK_INK)) ? LIGHT_INK : DARK_INK;
+}
+
+const lightBg = (bg) => luminance(bg) > 0.5;
+
+export function gridFor(bg) {
+  return lightBg(bg) ? GRID_ON_LIGHT : GRID_ON_DARK;
+}
+
+export function boardTheme(theme, bg) {
+  if (!isHex(bg)) return theme;
+  const light = lightBg(bg);
+  return {
+    ...theme,
+    bg,
+    grid: theme.grid ? { ...theme.grid, dot: gridFor(bg) } : theme.grid,
+    // 묶음 상자와 이름은 바탕 위에 그리므로 바탕 밝기에 맞춘다.
+    groupLabelInk: light ? SHELL.light.muted : SHELL.dark.muted,
+    groupFill: light ? SHELL.light.surface : SHELL.dark.surface,
+    groupLine: light ? SHELL.light.border : SHELL.dark.border,
+  };
+}
+
+export function paperFor(theme, card) {
+  const paper = card?.paper;
+  if (!isHex(paper)) return { bg: theme.textBg, ink: theme.textInk };
+  return { bg: paper, ink: inkFor(paper) };
 }

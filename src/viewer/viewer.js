@@ -7,14 +7,14 @@
 
 import { sortedLayout, SORT_CELL, SORT_GAP, GROUP_TITLE_PX } from '../layout.js';
 import { sortCols, zoomAt, fitView } from '../interaction.js';
-import { THEMES, themeName, groupDotColor } from '../theme.js';
+import { THEMES, themeName, groupDotColor, boardTheme, paperFor } from '../theme.js';
+import { captionFor } from '../drawplan.js';
 
 const BADGE = { youtube: '▶', video: '🎞', pinterest: '📌', text: '✎', link: '🔗' };
 const LINK_KINDS = new Set(['youtube', 'pinterest', 'link']);
 const CLICK_PX = 4;
 const ZOOM_STEP = 1.25;
 const ANIM_MS = 300;
-const CAPTION = { image: 'image', video: 'video', youtube: 'youtube', pinterest: 'pinterest' };
 const HEX = /^#[0-9a-f]{6}$/i;
 const LABEL_ROOM = 24; // 맞춤 때 상자 위 이름 자리
 
@@ -24,6 +24,7 @@ const shadowCss = (list) => (list ?? []).map((s) => `0 ${s.y}px ${s.blur}px ${s.
 function themeCss(t) {
   const pad = t.mat ? t.mat.pad : 0;
   const bottom = t.mat ? t.mat.bottom : 0;
+  const capBottom = t.mat ? t.mat.captionBottom ?? t.mat.bottom : 0;
   const grid = t.grid
     ? `background-image:radial-gradient(circle,${t.grid.dot} ${t.grid.r}px,transparent ${t.grid.r + 0.5}px);`
     : 'background-image:none;';
@@ -32,7 +33,7 @@ function themeCss(t) {
   return [
     `html,body{background:${t.bg};color:${t.textInk};font:${t.uiFont}}`,
     `#stage{background-color:${t.bg};${grid}}`,
-    `#bar{background:${t.bg};color:${t.textInk};border-bottom-color:${t.border}}`,
+    `#bar{background:${t.surfaceSolid};color:${t.textInk};border-bottom-color:${t.border}}`,
     `#bar h1{font:${t.linkTitleFont}}`,
     `#bar button{font:${t.uiFont};color:${t.textInk};background:${t.surfaceRaised};border-color:${t.border}}`,
     `#bar button[aria-pressed=true]{background:${t.accent};border-color:${t.accent};color:${t.accentContrast}}`,
@@ -44,6 +45,8 @@ function themeCss(t) {
     `.card{box-shadow:${lined(t.border)};background:${t.placeholderBg}}`,
     `.card.photo{box-shadow:${shadow};background:${t.matBg ?? t.loadingBg}}`,
     `.card.photo .pic{inset:${pad}px ${pad}px ${bottom}px ${pad}px;background:${t.loadingBg}}`,
+    `.card.photo.captioned .pic{bottom:${capBottom}px}`,
+    `.card.photo.captioned .note{bottom:${capBottom}px}`,
     `.card .cap{display:${t.captionColor ? 'block' : 'none'};font:${t.captionFont};color:${t.captionColor ?? 'inherit'}}`,
     `.card .badge{left:${pad + 6}px;top:${pad + 6}px;background:${t.badgeBg};color:${t.badgeInk};font:${t.badgeFont}}`,
     `.card.text{background:${t.textBg};color:${t.textInk};box-shadow:${lined(t.textBorder)}}`,
@@ -113,15 +116,26 @@ function start() {
   document.title = data.name || document.title;
 
   // --- 테마 ---
+  // 글 카드 종이: paper가 있는 카드만 인라인 색을 둔다(없으면 테마 CSS의 textBg).
+  const paperNodes = [];
+  const paintPapers = () => {
+    for (const [n, c] of paperNodes) {
+      const p = paperFor(theme, c);
+      n.style.background = p.bg;
+      n.style.color = p.ink;
+    }
+  };
   const themeStyle = el('style', { id: 'theme' });
   document.head.append(themeStyle);
   const mq = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
   let theme = THEMES.light;
   const applyTheme = () => {
     const name = themeName(!!mq?.matches);
-    theme = THEMES[name];
+    // 보드 bg가 있으면 바탕과 점 격자를 그 색에 맞춘다(앱 캔버스와 같은 boardTheme).
+    theme = boardTheme(THEMES[name], data.bg);
     document.documentElement.setAttribute('data-theme', name);
-    themeStyle.textContent = themeCss(THEMES[name]);
+    themeStyle.textContent = themeCss(theme);
+    paintPapers();
   };
   applyTheme();
   // 테마가 바뀌면 격자 간격도 다시 맞춘다. applyView는 아래에서 정하므로 처음 한 번은 부르지 않는다.
@@ -168,14 +182,16 @@ function start() {
     const src = c.hasThumb ? thumbUrl(c.id) : null;
     const color = HEX.test(c.color) ? c.color : '#9e9e9e';
     const type = src ? 'photo' : c.kind === 'text' ? 'text' : LINK_KINDS.has(c.kind) ? 'link' : 'placeholder';
-    const n = el('div', { class: `card ${type}`, 'data-id': c.id, title: c.title || '' });
+    const cap = type === 'photo' ? captionFor(c) : null;
+    const n = el('div', { class: `card ${type}${cap ? ' captioned' : ''}`, 'data-id': c.id, title: c.title || '' });
     if (type === 'photo') {
       n.append(el('div', { class: 'pic' }, el('img', { src, alt: c.title || '', draggable: 'false' })));
-      if (CAPTION[c.kind]) n.append(el('span', { class: 'cap', text: CAPTION[c.kind] }));
+      if (cap) n.append(el('span', { class: 'cap', text: cap }));
     } else if (type === 'text') {
       n.append(el('span', { class: 'accent', style: `background:${color}` }));
       n.append(el('div', { class: 'ph', text: c.text ?? '' }));
       n.append(el('span', { class: 'tdot', style: `background:${color}` }));
+      if (c.paper) paperNodes.push([n, c]);
     } else if (type === 'link') {
       const ph = el('div', { class: 'ph' }, el('b', { text: c.title || hostOf(c.url) }));
       ph.append(c.url ? `${hostOf(c.url)}\n${c.url}` : '');
@@ -189,6 +205,7 @@ function start() {
     world.append(n);
     nodes.set(c.id, n);
   }
+  paintPapers();
 
   let mode = 'manual';
   let view = { x: 0, y: 0, scale: 1 };
@@ -307,7 +324,15 @@ function start() {
     const vsrc = c.kind === 'video' && c.video ? videoUrl(c.id) : null;
     const isrc = c.hasThumb ? thumbUrl(c.id) : null;
     if (vsrc) box.append(el('video', { src: vsrc, controls: '', autoplay: '', playsinline: '' }));
-    else if (c.kind === 'text') box.append(el('div', { class: 'txt', text: c.text ?? '' }));
+    else if (c.kind === 'text') {
+      const txt = el('div', { class: 'txt', text: c.text ?? '' });
+      if (c.paper) {
+        const p = paperFor(theme, c);
+        txt.style.background = p.bg;
+        txt.style.color = p.ink;
+      }
+      box.append(txt);
+    }
     else if (isrc) box.append(el('img', { src: isrc, alt: c.title || '' }));
     const meta = el('div', { class: 'meta' });
     if (c.title) meta.append(el('span', { class: 'title', text: c.title }));

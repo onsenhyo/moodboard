@@ -12,6 +12,7 @@
 // 외부 요청은 없다. 원본 링크는 뷰어가 target=_blank rel=noopener 앵커로 만든다.
 
 import { liveGroups, effectiveGroupId } from './model.js';
+import { isHex } from './theme.js';
 
 export const WARN_BYTES = 50_000_000;
 export const BLOCK_BYTES = 95_000_000;
@@ -102,6 +103,7 @@ function viewerCard(board, c, embedded) {
   if (c.url) out.url = c.url;
   if (typeof c.text === 'string') out.text = c.text;
   if (c.note) out.note = c.note;
+  if (c.kind === 'text' && isHex(c.paper)) out.paper = c.paper;
   if (c.kind === 'video') out.video = embedded.has(c.id);
   return out;
 }
@@ -202,6 +204,7 @@ export async function* buildExportChunks(board, plan, readers) {
     groups: liveGroups(board).filter((g) => g.rect).map(viewerGroup),
     cards: cards.map((c) => viewerCard(board, c, embedded)),
   };
+  if (isHex(board?.bg)) data.bg = board.bg;
   yield* pack.add(head(board));
   yield* pack.add(`<script type="application/json" id="board">${jsonForScript(data)}</script>\n`);
 

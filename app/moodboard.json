@@ -67,7 +67,7 @@
   "assets": [
     {
       "id": "moodboard",
-      "version": 6
+      "version": 7
     }
   ],
   "storage": {
@@ -181,6 +181,9 @@
                         "groupId": {
                           "type": "string"
                         },
+                        "paper": {
+                          "type": "string"
+                        },
                         "deleted": {
                           "type": "boolean"
                         }
@@ -232,6 +235,9 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "bg": {
+                    "type": "string"
                   },
                   "updatedAt": {
                     "type": "number"
@@ -2049,7 +2055,7 @@
     "runtime": "javascript",
     "entry": {
       "id": "moodboard",
-      "version": 6
+      "version": 7
     },
     "outputs": {
       "selected": {
@@ -2156,6 +2162,18 @@
       },
       "group_count_label": {
         "default": ""
+      },
+      "board_bg": {
+        "default": "#f7f3f7"
+      },
+      "has_board_bg": {
+        "default": false
+      },
+      "sel_paper": {
+        "default": "#ffffff"
+      },
+      "has_text_paper": {
+        "default": false
       }
     },
     "actions": [
@@ -2178,7 +2196,11 @@
       "export",
       "group_add",
       "group_rename",
-      "group_delete"
+      "group_delete",
+      "set_board_bg",
+      "reset_board_bg",
+      "set_text_paper",
+      "reset_text_paper"
     ],
     "state_keys": [
       "draft",
@@ -2457,6 +2479,23 @@
             "label": "묶음 추가",
             "on_click": {
               "client": "group_add"
+            }
+          },
+          {
+            "type": "color",
+            "label": "배경",
+            "value": {
+              "client": "board_bg"
+            },
+            "on_change": {
+              "client": "set_board_bg"
+            }
+          },
+          {
+            "type": "button",
+            "label": "기본 배경",
+            "on_click": {
+              "client": "reset_board_bg"
             }
           }
         ],
@@ -2750,6 +2789,35 @@
                         },
                         "on_change": {
                           "client": "set_text_color"
+                        }
+                      }
+                    },
+                    {
+                      "type": "when",
+                      "value": {
+                        "client": "sel_is_text"
+                      },
+                      "child": {
+                        "type": "color",
+                        "label": "종이 색",
+                        "value": {
+                          "client": "sel_paper"
+                        },
+                        "on_change": {
+                          "client": "set_text_paper"
+                        }
+                      }
+                    },
+                    {
+                      "type": "when",
+                      "value": {
+                        "client": "has_text_paper"
+                      },
+                      "child": {
+                        "type": "button",
+                        "label": "기본 종이",
+                        "on_click": {
+                          "client": "reset_text_paper"
                         }
                       }
                     },

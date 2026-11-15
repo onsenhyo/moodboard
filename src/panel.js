@@ -21,11 +21,14 @@ export const EMPTY_PANEL = Object.freeze({
   sel_is_text: false,
   sel_text: '',
   sel_color: '#9e9e9e',
+  sel_paper: '#ffffff', // 글 카드 종이 색. 없으면 테마 textBg(sel.paperDefault)
+  has_text_paper: false, // 글 카드에 종이 색을 정했는가([기본 종이] 단추)
   sel_openable: false,
   group_selected: null, // {id, name, count}
   has_group_selected: false,
 });
 
+const HEX = /^#[0-9a-f]{6}$/i;
 const isHttps = (u) => typeof u === 'string' && /^https:\/\/\S+$/i.test(u);
 
 // sel: null(고른 것 없음) | {group:{id, name, count}}(묶음) | 카드 선택 객체.
@@ -68,6 +71,8 @@ export function panelOutputs(sel) {
     sel_is_text: kind === 'text',
     sel_text: kind === 'text' ? sel.text ?? '' : '',
     sel_color: sel.color ?? EMPTY_PANEL.sel_color,
+    sel_paper: HEX.test(sel.paper ?? '') ? sel.paper : sel.paperDefault ?? EMPTY_PANEL.sel_paper,
+    has_text_paper: kind === 'text' && HEX.test(sel.paper ?? ''),
     sel_openable: kind !== 'text' && kind !== 'image' && kind !== 'video' && isHttps(sel.url),
     group_selected: null,
     has_group_selected: false,

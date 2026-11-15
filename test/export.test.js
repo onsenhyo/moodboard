@@ -364,3 +364,32 @@ test('내보낸 HTML에 둥근 모서리가 없다', async () => {
   assert.doesNotMatch(html, /roundRect/);
   assert.doesNotMatch(html, /arcTo/);
 });
+
+// --- 배경색과 종이 색 ---
+
+test('board JSON에 보드 bg와 글 카드 paper를 그대로 넣고, 잘못된 값은 뺀다', async () => {
+  const b = {
+    ...boardOf([
+      card('t1', 'text', { text: '노랑', paper: '#fff3b0' }),
+      card('t2', 'text', { text: '기본' }),
+      card('t3', 'text', { text: '깨짐', paper: 'red' }),
+    ]),
+    bg: '#e8eef5',
+  };
+  const data = boardJson(await exportHtml(b, 'void 0'));
+  assert.equal(data.bg, '#e8eef5');
+  const byId = new Map(data.cards.map((c) => [c.id, c]));
+  assert.equal(byId.get('t1').paper, '#fff3b0');
+  assert.ok(!('paper' in byId.get('t2')));
+  assert.ok(!('paper' in byId.get('t3')));
+  const plain = boardJson(await exportHtml(boardOf([card('a', 'image')]), 'void 0'));
+  assert.ok(!('bg' in plain));
+});
+
+test('뷰어 번들이 bg와 paper를 읽는다', async () => {
+  const js = await viewer();
+  assert.ok(js.includes('rgba(0,0,0,.08)'));
+  assert.ok(js.includes('rgba(255,255,255,.10)'));
+  assert.match(js, /\.paper\b/);
+  assert.match(js, /\.bg\b/);
+});

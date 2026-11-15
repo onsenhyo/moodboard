@@ -99,3 +99,18 @@ test('panelOutputs: 카드를 고르면 묶음 출력은 비어 있다', () => {
   assert.equal(o.has_group_selected, false);
   assert.deepEqual(Object.keys(o).sort(), Object.keys(EMPTY_PANEL).sort());
 });
+
+test('panelOutputs: 글 카드의 종이 색. 없으면 기본 종이 색을 보이고 has_text_paper는 거짓', () => {
+  const plain = panelOutputs({ ...base, kind: 'text', text: 'a', paperDefault: '#342b3b' });
+  assert.equal(plain.sel_paper, '#342b3b');
+  assert.equal(plain.has_text_paper, false);
+  const set = panelOutputs({ ...base, kind: 'text', text: 'a', paper: '#fff3b0', paperDefault: '#ffffff' });
+  assert.equal(set.sel_paper, '#fff3b0');
+  assert.equal(set.has_text_paper, true);
+  // 글 카드가 아니면 종이 칸을 쓰지 않는다
+  const img = panelOutputs({ ...base, kind: 'image', paper: '#fff3b0' });
+  assert.equal(img.has_text_paper, false);
+  assert.equal(EMPTY_PANEL.has_text_paper, false);
+  assert.equal(EMPTY_PANEL.sel_paper, '#ffffff');
+  assert.deepEqual(Object.keys(set).sort(), Object.keys(EMPTY_PANEL).sort());
+});

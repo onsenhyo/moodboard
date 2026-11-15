@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { THEMES, themeName, groupDotColor } from '../src/theme.js';
+import { THEMES, themeName, groupDotColor, luminance, inkFor, gridFor, boardTheme, paperFor } from '../src/theme.js';
 import { colorSortKey } from '../src/color.js';
 
 const KEYS = ['bg', 'grid', 'mat', 'shadow', 'captionFont', 'captionColor', 'badgeBg', 'badgeInk',
@@ -23,8 +23,8 @@ test('두 테마 모두 20px 점 격자를 경계선 색으로', () => {
   assert.deepEqual(THEMES.dark.grid, { step: 20, dot: 'rgba(230,214,240,.13)', r: 1 });
 });
 
-test('라이트 매트는 4px, 아래 4px. 다크는 매트 없음', () => {
-  assert.deepEqual(THEMES.light.mat, { pad: 4, bottom: 4 });
+test('라이트 매트는 4px, 아래 4px(캡션 있는 종류는 아래 20px). 다크는 매트 없음', () => {
+  assert.deepEqual(THEMES.light.mat, { pad: 4, bottom: 4, captionBottom: 20 });
   assert.equal(THEMES.dark.mat, null);
 });
 
@@ -117,4 +117,51 @@ test('groupDotColor: 짝수 개면 아래쪽 가운데 hue, HSL(h,.55,.55)', () 
 
 test('groupDotColor: 색이 없는 카드는 건너뛴다', () => {
   assert.equal(groupDotColor([{}, { color: null }]), '#9e9e9e');
+});
+
+// --- 배경색과 종이 색 ---
+
+test('luminance: WCAG 상대 밝기', () => {
+  assert.equal(luminance('#000000'), 0);
+  assert.equal(luminance('#ffffff'), 1);
+  assert.ok(Math.abs(luminance('#808080') - 0.2159) < 0.001);
+  assert.ok(Math.abs(luminance('#FF0000') - 0.2126) < 0.001);
+  assert.equal(luminance('nope'), null);
+});
+
+test('inkFor: 어두운 종이에는 밝은 글자, 밝은 종이에는 어두운 글자', () => {
+  assert.equal(inkFor('#fff3b0'), '#302a36');
+  assert.equal(inkFor('#ffffff'), '#302a36');
+  assert.equal(inkFor('#342b3b'), '#ece3f2');
+  assert.equal(inkFor('#000000'), '#ece3f2');
+  assert.equal(inkFor('#1f4e79'), '#ece3f2');
+});
+
+test('gridFor: 밝기 0.5 초과면 검정 8%, 아니면 흰색 10%', () => {
+  assert.equal(gridFor('#e8eef5'), 'rgba(0,0,0,.08)');
+  assert.equal(gridFor('#ffffff'), 'rgba(0,0,0,.08)');
+  assert.equal(gridFor('#808080'), 'rgba(255,255,255,.10)');
+  assert.equal(gridFor('#2a2230'), 'rgba(255,255,255,.10)');
+});
+
+test('boardTheme: bg가 없으면 테마 그대로, 있으면 바탕과 격자를 바꾼다', () => {
+  assert.equal(boardTheme(THEMES.light, undefined), THEMES.light);
+  assert.equal(boardTheme(THEMES.dark, 'bad'), THEMES.dark);
+  const t = boardTheme(THEMES.light, '#1a2b3c');
+  assert.equal(t.bg, '#1a2b3c');
+  assert.deepEqual(t.grid, { step: 20, dot: 'rgba(255,255,255,.10)', r: 1 });
+  assert.equal(t.groupLabelInk, '#b8a7c5'); // 어두운 바탕에는 다크 muted
+  const d = boardTheme(THEMES.dark, '#e8eef5');
+  assert.equal(d.groupLabelInk, '#675a70');
+  assert.equal(d.groupFill, THEMES.light.groupFill);
+  assert.equal(d.groupLine, THEMES.light.groupLine);
+  assert.equal(d.surfaceSolid, '#2a2230', '창 부분 색은 테마 그대로');
+  assert.equal(THEMES.light.bg, '#f7f3f7', '원본 테마는 바뀌지 않는다');
+});
+
+test('paperFor: paper가 없으면 테마 textBg와 textInk, 있으면 그 색과 밝기에 맞춘 글자', () => {
+  assert.deepEqual(paperFor(THEMES.light, { kind: 'text' }), { bg: '#ffffff', ink: '#302a36' });
+  assert.deepEqual(paperFor(THEMES.dark, { kind: 'text' }), { bg: '#342b3b', ink: '#ece3f2' });
+  assert.deepEqual(paperFor(THEMES.dark, { kind: 'text', paper: '#fff3b0' }), { bg: '#fff3b0', ink: '#302a36' });
+  assert.deepEqual(paperFor(THEMES.light, { kind: 'text', paper: '#222222' }), { bg: '#222222', ink: '#ece3f2' });
 });

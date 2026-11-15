@@ -1,7 +1,8 @@
 // 브라우저 전용 캔버스 그리기. 순수한 부분(그리는 순서, 카드 매트, 묶음 이름)은 drawplan.js에 두고 테스트한다.
 //
 // createRenderer({scene, thumbB64, theme}) -> {attach, setTargets, redraw, invalidateThumbs}
-// - scene() -> {cards, groups, view, selectedId, selectedGroupId, drag, mode}.
+// - scene() -> {cards, groups, view, selectedId, selectedGroupId, drag, mode, bg}.
+//   bg는 보드 배경('#rrggbb'). 없으면 테마 bg를 쓴다(theme.js boardTheme). 글 카드의 paper는 paperFor로 칠한다.
 //   drag.rect가 있으면 그 카드(또는 묶음)는 그 자리에 그린다. 묶음을 끌 때는 drag.cards의 자리에 카드를 그린다.
 // - thumbB64(cardId) -> Promise<string|null>. 썸네일 base64(data: 접두 없음).
 // - theme() -> THEMES의 한 값(theme.js). 그릴 때마다 묻는다.
@@ -12,7 +13,7 @@
 // 모든 사각형은 각지게 그린다(둥근 모서리 없음).
 
 import { toScreen } from './layout.js';
-import { THEMES, groupDotColor } from './theme.js';
+import { THEMES, groupDotColor, boardTheme, paperFor } from './theme.js';
 import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle } from './drawplan.js';
 
 const ANIM_MS = 300;
@@ -241,7 +242,8 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
   }
 
   function drawText(ctx, th, card, s) {
-    ctx.fillStyle = th.textBg;
+    const paper = paperFor(th, card);
+    ctx.fillStyle = paper.bg;
     ctx.fillRect(s.x, s.y, s.w, s.h);
     const bar = th.textAccentBar ? th.textAccentWidth ?? 3 : 0;
     if (th.textBorder) strokeInside(ctx, th.textBorder, s);
@@ -251,7 +253,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     }
     const pad = 12;
     if (s.w > 40 && s.h > 30) {
-      ctx.fillStyle = th.textInk;
+      ctx.fillStyle = paper.ink;
       ctx.font = th.textFont;
       ctx.textBaseline = 'top';
       const lineH = 18;
@@ -404,8 +406,8 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     const { canvas, cssWidth, cssHeight, dpr } = surface;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const th = theme() ?? THEMES.light;
     const sc = scene();
+    const th = boardTheme(theme() ?? THEMES.light, sc.bg);
     const view = sc.view;
     const manual = sc.mode !== 'sorted';
     const drag = sc.drag;

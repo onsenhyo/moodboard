@@ -42,6 +42,7 @@ const cardSchema = {
     url: optStr,
     text: optStr,
     groupId: str, // 묶음 id. 묶음 밖이면 필드가 없다
+    paper: str, // 글 카드 종이 색 '#rrggbb'. 기본(테마 textBg)이면 필드가 없다
     deleted: bool,
   },
   additionalProperties: false,
@@ -73,6 +74,7 @@ const boardSchema = {
     name: str,
     cards: { type: 'array', items: cardSchema },
     groups: { type: 'array', items: groupSchema },
+    bg: str, // 보드 배경 '#rrggbb'. 기본(테마 bg)이면 필드가 없다
     updatedAt: num,
     deleted: bool,
   },
@@ -150,12 +152,18 @@ const outputs = {
   group_selected: null, // {id, name, count}|null
   has_group_selected: false,
   group_count_label: '', // 옆 칸 'N장'. 블록은 group_selected.count를 읽지 못해 main.js가 따로 낸다
+  // 3차 A: 보드 배경과 글 카드 종이 색
+  board_bg: '#f7f3f7', // 툴바 [배경]. 보드 bg가 없으면 테마 bg
+  has_board_bg: false,
+  sel_paper: '#ffffff', // 옆 칸 [종이 색]. 카드 paper가 없으면 테마 textBg
+  has_text_paper: false,
 };
 
 const actions = [
   'drop', 'pick', 'add_text', 'sort_color', 'sort_manual', 'zoom_in', 'zoom_out', 'zoom_fit', 'pointer',
   'delete_selected', 'set_text_color', 'set_text', 'toggle_include_video', 'board_select', 'board_new',
   'board_rename', 'export', 'group_add', 'group_rename', 'group_delete',
+  'set_board_bg', 'reset_board_bg', 'set_text_paper', 'reset_text_paper',
 ];
 
 // --- 화면 ---
@@ -189,6 +197,9 @@ const toolbar = {
       },
     },
     { type: 'button', label: '묶음 추가', on_click: c('group_add') },
+    // 보드 배경. 값이 없으면 테마 바탕을 보이고, [기본 배경]은 보드의 bg 키를 지운다.
+    { type: 'color', label: '배경', value: c('board_bg'), on_change: c('set_board_bg') },
+    { type: 'button', label: '기본 배경', on_click: c('reset_board_bg') },
   ],
   end: [
     { type: 'button', label: '색으로 정렬', variant: 'chip', pressed: c('sorted'), on_click: c('sort_color') },
@@ -224,6 +235,8 @@ const detail = {
       value: c('sel_text'), on_change: c('set_text'),
     }),
     when('sel_is_text', { type: 'color', label: '색', value: c('sel_color'), on_change: c('set_text_color') }),
+    when('sel_is_text', { type: 'color', label: '종이 색', value: c('sel_paper'), on_change: c('set_text_paper') }),
+    when('has_text_paper', { type: 'button', label: '기본 종이', on_click: c('reset_text_paper') }),
     when('sel_openable', { type: 'button', label: '브라우저로 열기', on_click: { open_url: c('selected_url') } }),
     {
       type: 'button', label: '삭제', variant: 'danger', on_click: c('delete_selected'),

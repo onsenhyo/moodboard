@@ -172,6 +172,8 @@ async function publishSelected() {
     url: c.url ?? null,
     text: c.text ?? null,
     color: c.color,
+    paper: c.paper ?? null,
+    paperDefault: THEMES[themeKey].textBg,
     hasOrig,
     origKey: c.origKey ?? null,
     thumbDataUrl: b64 ? `data:image/jpeg;base64,${b64}` : null,
@@ -196,10 +198,14 @@ function select({ cardId = null, groupId = null } = {}) {
 }
 
 function publishBoards() {
+  const bg = board()?.bg;
   p.publish({
     board_options: liveBoards().map((b) => ({ value: b.id, label: b.name })),
     board: boardId,
     board_label: board()?.name ?? '',
+    // 툴바 [배경] color. 보드 bg가 없으면 지금 테마의 바탕을 보인다.
+    board_bg: HEX.test(bg ?? '') ? bg : THEMES[themeKey].bg,
+    has_board_bg: HEX.test(bg ?? ''),
   });
 }
 
@@ -216,6 +222,7 @@ let themeKey = themeName(!!darkQuery?.matches);
 const renderer = createRenderer({
   scene: () => ({
     cards: ui.cards, groups: ui.groups, view: ui.view, selectedId, selectedGroupId, drag: ui.drag, mode: ui.mode,
+    bg: board()?.bg,
   }),
   thumbB64: (id) => (thumbs ? thumbs.get(id) : Promise.resolve(null)),
   theme: () => THEMES[themeKey],
@@ -226,6 +233,9 @@ function setTheme(name) {
     themeKey = name;
     renderer.redraw();
     preview.redraw();
+    // [배경]과 [종이 색]의 기본값은 테마를 따른다.
+    publishBoards();
+    publishSelected();
   }
   p.setState('theme', name);
 }
@@ -449,6 +459,51 @@ p.handle('set_text_color', ({ event } = {}) => {
   scheduleSave();
   publishSelected();
   clearNotice();
+});
+
+// 보드 배경과 글 카드 종이. color 블록은 끄는 동안 값을 여러 번 보내므로 저장은 조금 모아서 한다.
+// 기본값으로 돌릴 때는 키를 지운다(저장 스키마는 문자열만 받아 null을 쓰지 않는다).
+function setBoardBg(value) {
+  const b = board();
+  if (!b) return;
+  if (value === null) delete b.bg;
+  else b.bg = value;
+  b.updatedAt = Date.now();
+  publishBoards();
+  renderer.redraw();
+  scheduleSave(DRAG_SAVE_MS);
+  clearNotice();
+}
+
+p.handle('set_board_bg', ({ event } = {}) => {
+  if (typeof event !== 'string' || !HEX.test(event)) return;
+  setBoardBg(event.toLowerCase());
+});
+
+p.handle('reset_board_bg', () => {
+  if (board() && 'bg' in board()) setBoardBg(null);
+});
+
+function setTextPaper(value) {
+  const c = cardById(selectedId);
+  if (!c || c.kind !== 'text') return;
+  if (value === null) delete c.paper;
+  else c.paper = value;
+  c.updatedAt = Date.now();
+  refresh(false);
+  scheduleSave(DRAG_SAVE_MS);
+  publishSelected();
+  clearNotice();
+}
+
+p.handle('set_text_paper', ({ event } = {}) => {
+  if (typeof event !== 'string' || !HEX.test(event)) return;
+  setTextPaper(event.toLowerCase());
+});
+
+p.handle('reset_text_paper', () => {
+  const c = cardById(selectedId);
+  if (c && 'paper' in c) setTextPaper(null);
 });
 
 p.handle('set_text', ({ event } = {}) => {
