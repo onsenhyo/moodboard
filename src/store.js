@@ -119,6 +119,9 @@ function utf8Len(s) {
   return n;
 }
 
+// JSON.stringify(value)의 UTF-8 바이트 수(저장 항목 한도를 잴 때 쓴다).
+export const jsonBytes = (value) => utf8Len(JSON.stringify(value) ?? '');
+
 const entryBytes = (k, v) => utf8Len(JSON.stringify(k)) + 1 + utf8Len(JSON.stringify(v));
 
 // JSON.stringify(Object.fromEntries(map))의 UTF-8 바이트 수를 문자열을 만들지 않고 센다.

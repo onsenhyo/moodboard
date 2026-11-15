@@ -181,3 +181,121 @@ test('cardTextPatch: 한 프레임이 이름을 쓰고 다른 프레임이 옮�
   assert.equal(d.boards[0].cards[0].label, '이름');
   assert.equal(d.boards[0].cards[0].manual.x, 300);
 });
+
+// --- 저장 한도(1MiB)와 버릴 편집 ---
+
+import { DOC_MAX_BYTES, fitPatches, LABEL_MAX, TEXT_MAX, clipText } from '../src/patches.js';
+
+const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v), 'utf8');
+const bigText = (id, n, t) => ({ kind: 'card', boardId: 'b', id, insert: { id, kind: 'text', text: 'x'.repeat(n), updatedAt: t }, t });
+
+test('fitPatches: 한도를 넘게 만든 패치만 빼고 나머지는 얹는다', () => {
+  const limit = 2000;
+  const r = fitPatches(base(), [move, bigText('big', 3000, 11), paper], { limit, now: () => 100 });
+  assert.deepEqual(r.dropped.map((p) => p.id), ['big']);
+  assert.equal(r.kept.length, 2);
+  assert.ok(bytesOf(r.doc) <= limit);
+  assert.equal(r.doc.boards[0].cards[0].paper, '#223344');
+  assert.equal(r.doc.boards[0].cards.some((c) => c.id === 'big'), false);
+  // 한도 안이면 그대로 다 얹는다
+  const ok = fitPatches(base(), [move, paper], { limit, now: () => 100 });
+  assert.equal(ok.dropped.length, 0);
+  assert.equal(DOC_MAX_BYTES, 1_048_576);
+});
+
+test('editor.save: 한도를 넘는 편집은 버리고 알리며, 다음 저장을 막지 않는다', async () => {
+  const store = fakeStore(base());
+  const ed = createDocEditor({ adapter: store.adapter('c'), now: () => 100, limit: 2000 });
+  ed.receive(store.value);
+  ed.edit(move);
+  ed.edit(bigText('big', 3000, 11));
+  await assert.rejects(ed.save(), (err) => err.code === 'too_large' && err.dropped === 1 && typeof err.message === 'string');
+  assert.equal(ed.pending, 0);
+  assert.deepEqual(store.value.boards[0].cards[0].manual, move.fields.manual);
+  assert.equal(ed.doc.boards[0].cards.some((c) => c.id === 'big'), false, '화면 문서에서도 빠진다');
+  ed.edit(paper);
+  await ed.save();
+  assert.equal(store.value.boards[0].cards[0].paper, '#223344');
+});
+
+test('editor.writeNow: 닫을 때도 한도를 넘는 편집은 빼고 쓴다', async () => {
+  const store = fakeStore(base());
+  const adapter = store.adapter('c');
+  await adapter.get('boards');
+  const ed = createDocEditor({ adapter, now: () => 100, limit: 2000 });
+  ed.receive(store.value);
+  ed.edit([move, bigText('big', 3000, 11)]);
+  await ed.writeNow();
+  assert.equal(ed.pending, 0);
+  assert.deepEqual(store.value.boards[0].cards[0].manual, move.fields.manual);
+  assert.equal(store.value.boards[0].cards.length, 1);
+});
+
+test('editor.save: 저장소가 받지 않는 편집(invalid_request)은 하나씩 나눠 그것만 버린다', async () => {
+  const store = fakeStore(base());
+  const inner = store.adapter('c');
+  const adapter = {
+    get: inner.get,
+    set: async (e, v) => {
+      if (v.boards[0].cards.some((c) => 'bad' in c)) throw { code: 'invalid_request', id: 'STORAGE_WRITE_SCHEMA_MISMATCH' };
+      return inner.set(e, v);
+    },
+  };
+  const ed = createDocEditor({ adapter, now: () => 100 });
+  ed.receive(store.value);
+  ed.edit(move);
+  ed.edit({ kind: 'group', boardId: 'b', id: 'g', fields: { name: '새 이름' }, t: 12 });
+  ed.edit({ kind: 'card', boardId: 'b', id: 'x', fields: { bad: 1 }, t: 13 });
+  await assert.rejects(ed.save(), (err) => err.code === 'invalid' && err.dropped === 1);
+  assert.equal(ed.pending, 0);
+  assert.deepEqual(store.value.boards[0].cards[0].manual, move.fields.manual);
+  assert.equal(store.value.boards[0].groups[0].name, '새 이름');
+  assert.equal('bad' in ed.doc.boards[0].cards[0], false);
+});
+
+test('editor.save: 잠깐의 실패(server)는 편집을 줄에 남긴다', async () => {
+  const store = fakeStore(base());
+  const inner = store.adapter('c');
+  let fail = true;
+  const adapter = { get: inner.get, set: async (e, v) => { if (fail) throw { code: 'server' }; return inner.set(e, v); } };
+  const ed = createDocEditor({ adapter, now: () => 100 });
+  ed.receive(store.value);
+  ed.edit(move);
+  await assert.rejects(ed.save(), (err) => err.code === 'server');
+  assert.equal(ed.pending, 1);
+  fail = false;
+  await ed.save();
+  assert.equal(ed.pending, 0);
+});
+
+test('editor.save: 저장 중에 받은 더 새 값은 저장이 끝나도 남는다', async () => {
+  const store = fakeStore(base());
+  const adapter = store.adapter('c');
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const slow = { get: adapter.get, set: async (e, v) => { await gate; return adapter.set(e, v); } };
+  const ed = createDocEditor({ adapter: slow, now: () => 100 });
+  ed.receive(store.value);
+  ed.edit(move);
+  const saving = ed.save();
+  await new Promise((r) => setTimeout(r, 0));
+  // 다른 PC가 새 보드를 더하고 묶음 이름을 바꾼 값이 저장 중에 온다
+  const newer = structuredClone(store.value);
+  newer.boards.push({ id: 'b2', name: '다른 PC', cards: [], groups: [], updatedAt: 200 });
+  newer.boards[0].groups[0] = { ...newer.boards[0].groups[0], name: '바뀜', updatedAt: 200 };
+  ed.receive(newer);
+  release();
+  await saving;
+  assert.ok(ed.doc.boards.some((b) => b.id === 'b2'), '받은 새 보드가 남는다');
+  assert.equal(ed.doc.boards[0].groups[0].name, '바뀜');
+  assert.deepEqual(ed.doc.boards[0].cards[0].manual, move.fields.manual, '방금 쓴 편집도 남는다');
+});
+
+test('글 한도: label은 100자, 글 카드 본문은 20,000자(code point)', () => {
+  assert.equal(LABEL_MAX, 100);
+  assert.equal(TEXT_MAX, 20_000);
+  assert.equal([...cardTextPatch('b', 'x', 'label', '가'.repeat(300), LABEL_MAX).fields.label].length, 100);
+  assert.equal([...clipText('😀'.repeat(TEXT_MAX + 5), TEXT_MAX)].length, TEXT_MAX);
+  assert.equal(clipText('  앞뒤 공백은 둔다\n', TEXT_MAX), '  앞뒤 공백은 둔다\n');
+  assert.equal(clipText(null, 5), '');
+});
