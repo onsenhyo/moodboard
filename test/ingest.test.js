@@ -310,3 +310,62 @@ test('mime이 비었거나 octet-stream이면 확장자로 판별한다', async 
   assert.deepEqual(deps.calls.makeThumb.slice(0, 2), ['image/jpeg', 'image/jpeg']);
   assert.equal(deps.calls.makeThumb[3], 'image/png');
 });
+
+// --- 움직이는 GIF ---
+
+import { GIF_ANIM_MAX } from '../src/ingest.js';
+
+test('작은 GIF: 정지 썸네일과 함께 원본 base64를 gif 저장소에 넣고 anim', async () => {
+  const raw = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 1, 2, 3]);
+  const gifs = fakeThumbs();
+  const deps = fakeDeps({ gifs, readBytes: async () => raw.buffer });
+  const { cards } = await ingestFiles([file('g', 'dance.gif', 'image/gif', raw.length)], deps);
+  assert.equal(cards.length, 1);
+  const c = cards[0];
+  assert.equal(c.anim, true);
+  assert.equal(c.hasThumb, true);
+  assert.equal(deps.thumbs.data.get(c.id), 'QUJD'); // 정지 JPEG도 그대로
+  assert.equal(gifs.data.get(c.id), Buffer.from(raw).toString('base64'));
+  assert.deepEqual(deps.calls.makeThumb, ['image/gif']);
+});
+
+test('큰 GIF(700,000바이트 넘음)는 정지 카드, gif 저장소에 넣지 않는다', async () => {
+  const gifs = fakeThumbs();
+  const big = new Uint8Array(GIF_ANIM_MAX + 1);
+  const deps = fakeDeps({ gifs, readBytes: async () => big.buffer });
+  const { cards } = await ingestFiles([file('g', 'big.gif', 'image/gif', big.length)], deps);
+  assert.equal(GIF_ANIM_MAX, 700_000);
+  assert.equal(cards[0].hasThumb, true);
+  assert.equal('anim' in cards[0], false);
+  assert.equal(gifs.puts.length, 0);
+  // 딱 한도면 움직인다
+  const edge = new Uint8Array(GIF_ANIM_MAX);
+  const deps2 = fakeDeps({ gifs: fakeThumbs(), readBytes: async () => edge.buffer });
+  const r2 = await ingestFiles([file('g', 'edge.gif', 'image/gif', edge.length)], deps2);
+  assert.equal(r2.cards[0].anim, true);
+});
+
+test('gif 저장소가 차거나 던지면 정지 카드로 남고 anim은 없다. 썸네일 full과 달리 멈추지 않는다', async () => {
+  const deps = fakeDeps({ gifs: fakeThumbs({ fullAfter: 0 }) });
+  const r = await ingestFiles([file('a', 'a.gif', 'image/gif'), file('b', 'b.png', 'image/png')], deps);
+  assert.equal(r.full, false);
+  assert.equal(r.cards.length, 2);
+  assert.equal('anim' in r.cards[0], false);
+  assert.equal(r.cards[0].hasThumb, true);
+  const deps2 = fakeDeps({ gifs: { put: async () => { throw new Error('thumbs loading'); } } });
+  const r2 = await ingestFiles([file('a', 'a.gif', 'image/gif')], deps2);
+  assert.equal('anim' in r2.cards[0], false);
+});
+
+test('GIF가 아니거나 썸네일이 없거나 gif 저장소가 없으면 gif를 넣지 않는다', async () => {
+  const gifs = fakeThumbs();
+  const deps = fakeDeps({ gifs });
+  const r = await ingestFiles([file('a', 'a.png', 'image/png'), file('empty', 'e.gif', 'image/gif', 0)], deps);
+  assert.equal(gifs.puts.length, 0);
+  assert.ok(r.cards.every((c) => !('anim' in c)));
+  const r2 = await ingestFiles([file('a', 'a.gif', 'image/gif')], fakeDeps({ gifs: null }));
+  assert.equal('anim' in r2.cards[0], false);
+  // mime이 비어도 확장자로 GIF를 알아본다
+  const r3 = await ingestFiles([file('a', 'x.GIF', '')], fakeDeps({ gifs: fakeThumbs() }));
+  assert.equal(r3.cards[0].anim, true);
+});

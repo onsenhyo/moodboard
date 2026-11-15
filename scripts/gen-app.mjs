@@ -11,6 +11,7 @@ import { placeholderHtml } from '../src/boardhtml.js';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ASSET_ID = 'moodboard'; // 진입 로더
 const SHARDS = 128; // src/main.js와 src/board/board.js의 SHARDS와 같아야 한다.
+const GIF_SHARDS = 32; // src/store.js의 GIF_STORE와 같아야 한다.
 
 const built = JSON.parse(readFileSync(join(ROOT, 'dist', 'assets.json'), 'utf8'));
 const ASSETS = built.map((a) => ({ id: a.id, version: a.version }));
@@ -21,6 +22,7 @@ const entry = ASSETS.find((a) => a.id === ASSET_ID);
 if (!entry) throw new Error('dist/assets.json에 진입 로더가 없습니다. npm run build를 먼저 하세요');
 
 const shardId = (i) => 'thumbs_' + String(i).padStart(3, '0');
+const gifShardId = (i) => 'gifs_' + String(i).padStart(2, '0');
 
 // --- 저장 항목 ---
 // 저장 스키마는 엄격하다. 선언하지 않은 필드는 쓰기에서 거부되므로 카드와 보드의 필드를 모두 적는다.
@@ -43,6 +45,7 @@ const cardSchema = {
       additionalProperties: false,
     },
     hasThumb: bool,
+    anim: bool, // 작은 GIF. 원본이 gifs_NN에 있어 보드에서 움직인다. 아니면 필드가 없다
     includeVideo: bool,
     updatedAt: num,
     origKey: optStr, // orig/<id>.<ext>, 이 PC의 blobs 키
@@ -126,7 +129,18 @@ const thumbEntries = Array.from({ length: SHARDS }, (_, i) => ({
   default: {},
 }));
 
-const storageIds = ['boards', ...thumbEntries.map((e) => e.id)];
+// 움직이는 GIF 원본(700,000바이트 이하). 모양과 한도는 썸네일 shard와 같다.
+const gifEntries = Array.from({ length: GIF_SHARDS }, (_, i) => ({
+  id: gifShardId(i),
+  key: gifShardId(i),
+  kind: 'json',
+  label: '움직이는 GIF',
+  presentation: 'hidden',
+  schema: { type: 'object', additionalProperties: { type: 'string' } },
+  default: {},
+}));
+
+const storageIds = ['boards', ...thumbEntries.map((e) => e.id), ...gifEntries.map((e) => e.id)];
 
 // --- client ---
 
@@ -408,7 +422,7 @@ const app = {
     selected: null, view: null, mode: 'manual', cmd: null, paste_inbox: null, crop_target: null, drop_inbox: null, drop_ack: null,
   },
   assets: ASSETS,
-  storage: { entries: [boardsEntry, ...thumbEntries] },
+  storage: { entries: [boardsEntry, ...thumbEntries, ...gifEntries] },
   client: {
     runtime: 'javascript',
     entry: { id: ASSET_ID, version: entry.version },

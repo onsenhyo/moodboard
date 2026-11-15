@@ -111,14 +111,27 @@ function start() {
   const thumbs = readBlocks('data-thumb');
   const videos = readBlocks('data-video');
   const videoUrls = new Map();
-  const thumbUrl = (id) => (thumbs.has(id) ? `data:image/jpeg;base64,${thumbs.get(id).b64}` : null);
+  // anim 카드는 GIF(data-mime="image/gif")가 실려 <img>에서 움직인다. 나머지는 JPEG.
+  const isGif = (id) => thumbs.get(id)?.mime === 'image/gif';
+  const thumbUrl = (id) => (thumbs.has(id) ? `data:${isGif(id) ? 'image/gif' : 'image/jpeg'};base64,${thumbs.get(id).b64}` : null);
+  // 자른 GIF는 캔버스로 옮기면 첫 프레임에 멈추므로, 되는 브라우저에서는 object-view-box로 원본 그대로 잘라 움직이게 둔다.
+  const viewBoxCrop = typeof CSS !== 'undefined' && !!CSS.supports?.('object-view-box', 'inset(0px)');
+  const liveCrop = (c) => (isGif(c.id) && viewBoxCrop ? normCrop(c.crop) : null);
+  function applyLiveCrop(c, img) {
+    const k = liveCrop(c);
+    if (!k) return false;
+    const pct = (v) => `${Math.max(0, v * 100)}%`;
+    img.style.objectViewBox = `inset(${pct(k.y)} ${pct(1 - k.x - k.w)} ${pct(1 - k.y - k.h)} ${pct(k.x)})`;
+    return true;
+  }
   // 자른 사진: 썸네일에서 crop 사각형만 캔버스에 옮겨 그 그림을 쓴다(사진 칸에는 지금처럼 cover로 들어간다).
   const croppedUrls = new Map();
-  const photoUrl = (c) => croppedUrls.get(c.id) ?? (normCrop(c.crop) ? null : thumbUrl(c.id));
+  const photoUrl = (c) => croppedUrls.get(c.id) ?? (normCrop(c.crop) && !liveCrop(c) ? null : thumbUrl(c.id));
   function cropInto(c, img) {
     const src = thumbUrl(c.id);
     const crop = normCrop(c.crop);
     if (!src || !crop) return;
+    if (applyLiveCrop(c, img)) { img.src = src; return; }
     const im = new Image();
     im.onload = () => {
       const { sx, sy, sw, sh } = cropSourceRect(crop, im.naturalWidth, im.naturalHeight);
@@ -369,7 +382,11 @@ function start() {
       }
       box.append(txt);
     }
-    else if (isrc) box.append(el('img', { src: isrc, alt: c.title || '' }));
+    else if (isrc) {
+      const img = el('img', { src: isrc, alt: c.title || '' });
+      applyLiveCrop(c, img);
+      box.append(img);
+    }
     const meta = el('div', { class: 'meta' });
     const title = cardLabel(c) || c.title;
     if (title) meta.append(el('span', { class: 'title', text: title }));

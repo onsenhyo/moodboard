@@ -1,7 +1,7 @@
 // sandbox 보드 진입점(보드 코드 조각 moodboard-board-js-1..N, client가 board_html로 싣는다. src/boardhtml.js). 보드 그리기와 조작을 맡는다.
 //
 // 브리지: window.kaleidoscope (kaleidoscope ui/src/blocks/sandbox-frame.ts)
-// - storage boards, thumbs_000..127을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).
+// - storage boards, thumbs_000..127, gifs_00..31(움직이는 GIF 원본, gifanim.js)을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).
 // - 창 상태
 //   읽기: board(지금 보드 id, client가 씀), mode('manual'|'sorted'), cmd({op, n}, n이 바뀔 때만 실행), selected,
 //         crop_target({id, n}, n이 바뀌면 그 카드의 자르기 화면을 연다. 사진 카드를 두 번 눌러도 연다), drop_ack
@@ -18,7 +18,8 @@ import {
 } from '../crop.js';
 import { createRenderer } from '../render.js';
 import { THEMES, themeName, boardTheme } from '../theme.js';
-import { BOARDS_ENTRY, shardIdOf, createThumbStore, isConflict } from '../store.js';
+import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore, isConflict } from '../store.js';
+import { createGifPlayer } from '../gifanim.js';
 import { createDocEditor } from '../patches.js';
 import { createSaver, retryRead } from '../startup.js';
 import { liveGroups } from '../model.js';
@@ -82,6 +83,7 @@ let boardId = null;
 let ui = initialState();
 let selected = normSelected(k.getState('selected'));
 let thumbs = null;
+let gifs = null; // gif 저장소. 준비되기 전에는 anim 카드도 정지 썸네일을 그린다
 let loaded = false;
 let viewRestored = false;
 // 자르기 화면. {id, base(들어올 때의 crop), rect(지금 고른 사각형), drag: {handle, x, y, rect0, pointerId}|null}
@@ -97,6 +99,11 @@ const groupById = (id) => (id ? liveGroups(board()).find((g) => g.id === id) ?? 
 const selCard = () => (selected?.kind === 'card' ? selected.id : null);
 const selGroup = () => (selected?.kind === 'group' ? selected.id : null);
 
+const gifPlayer = createGifPlayer({
+  load: (id) => (gifs ? gifs.get(id) : Promise.resolve(undefined)),
+  onFrame: () => renderer.redraw(),
+});
+
 const renderer = createRenderer({
   scene: () => ({
     cards: ui.cards, groups: ui.groups, view: ui.view, selectedId: selCard(), selectedGroupId: selGroup(),
@@ -105,6 +112,7 @@ const renderer = createRenderer({
   }),
   thumbB64: (id) => (thumbs ? thumbs.get(id) : Promise.resolve(null)),
   theme: () => THEMES[themeKey],
+  gifs: gifPlayer,
 });
 
 // 프레임 바탕도 보드 바탕으로 칠한다(캔버스가 늦게 그려져도 다른 색이 비치지 않게).
@@ -182,7 +190,10 @@ function flushNow() {
   return closing;
 }
 window.addEventListener('pagehide', flushNow);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushNow(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushNow();
+  else renderer.redraw(); // 숨은 동안 멈춘 GIF 루프를 다시 돌린다
+});
 
 // 지금 보드의 카드나 묶음 하나를 고치는 패치. 고친 필드만 저장에 실린다.
 function touchCard(id, fields, deleteKeys) {
@@ -524,6 +535,30 @@ for (let i = 0; i < SHARDS; i++) {
   }, () => {});
 }
 
+const pendingGifs = new Map();
+for (let i = 0; i < GIF_STORE.shards; i++) {
+  const id = gifShardIdOf(i);
+  k.onStorageChange(id, (value) => {
+    if (!gifs) { pendingGifs.set(id, value); return; }
+    gifs.reload(id, value);
+    gifPlayer.invalidate();
+  }, () => {});
+}
+
+// GIF 저장소는 썸네일과 따로 연다(보드가 늦게 뜨지 않게).
+async function startGifs() {
+  gifs = await createThumbStore(storage, { ...GIF_STORE });
+  for (const [id, value] of pendingGifs) gifs.reload(id, value);
+  pendingGifs.clear();
+  gifPlayer.invalidate();
+  renderer.redraw();
+  await Promise.all(gifs.missing().map((id) => retryRead(() => storage.get(id), {
+    stop: () => !gifs.missing().includes(id),
+  }).then((r) => {
+    if (!r.stopped) { gifs.reload(id, r.value); gifPlayer.invalidate(); renderer.redraw(); }
+  })));
+}
+
 async function start() {
   boardId = typeof k.getState('board') === 'string' ? k.getState('board') : null;
   ui = { ...ui, mode: k.getState('mode') === 'sorted' ? 'sorted' : 'manual', size: size() };
@@ -539,6 +574,7 @@ async function start() {
       if (!r.stopped && !loaded) { ed.receive(r.value); loaded = true; }
       refresh(false);
     });
+  startGifs().catch(() => { /* GIF는 정지 썸네일로 남는다 */ });
   thumbs = await createThumbStore(storage, { shards: SHARDS });
   for (const [id, value] of pendingShards) thumbs.reload(id, value);
   pendingShards.clear();

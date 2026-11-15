@@ -642,3 +642,39 @@ test('packThumbs: skip에 든 shard는 고르지 않는다', () => {
   assert.deepEqual(packThumbs(new Map(), { cardId: 'k', b64: 'x' }, { shards: 2, skip: new Set(['thumbs_000']) }), { shardId: 'thumbs_001' });
   assert.deepEqual(packThumbs(new Map(), { cardId: 'k', b64: 'x' }, { shards: 1, skip: new Set(['thumbs_000']) }), { error: 'full' });
 });
+
+// --- 접두와 개수 바꾸기(GIF 저장소) ---
+
+test('createThumbStore: GIF_STORE를 펼치면 gifs_00..31에 쓰고 thumbs_는 건드리지 않는다', async () => {
+  const { GIF_STORE, gifShardIdOf, shardIdFor } = await import('../src/store.js');
+  assert.deepEqual({ ...GIF_STORE }, { prefix: 'gifs_', pad: 2, shards: 32 });
+  assert.equal(gifShardIdOf(0), 'gifs_00');
+  assert.equal(gifShardIdOf(31), 'gifs_31');
+  assert.equal(shardIdFor('x_', 4)(7), 'x_0007');
+  const a = fakeAdapter();
+  const s = await createThumbStore(a, { ...GIF_STORE, now: () => 5 });
+  assert.equal(a.gets, 32);
+  await s.put('c1', 'R0lG');
+  assert.deepEqual(a.sets.map(([e]) => e), ['gifs_00']);
+  assert.equal(await s.get('c1'), 'R0lG');
+  s.reload('thumbs_000', { c2: '1:QQ==' }); // 다른 접두의 shard는 무시한다
+  assert.equal(await s.get('c2'), null);
+  s.reload('gifs_05', { c2: '1:QQ==' });
+  assert.equal(await s.get('c2'), 'QQ==');
+  await s.remove('c1');
+  assert.deepEqual(a.data.get('gifs_00'), {});
+});
+
+test('createThumbStore: 작은 shard 한도와 개수로 다음 shard로 넘어가고 다 차면 full', async () => {
+  const a = fakeAdapter();
+  const s = await createThumbStore(a, { prefix: 'gifs_', pad: 2, shards: 2, shardLimit: 40, now: () => 1 });
+  assert.equal(await s.put('a', 'A'.repeat(20)), undefined);
+  assert.equal(await s.put('b', 'B'.repeat(20)), undefined);
+  assert.deepEqual(await s.put('c', 'C'.repeat(20)), { error: 'full' });
+  assert.deepEqual([...a.data.keys()].sort(), ['gifs_00', 'gifs_01']);
+});
+
+test('packThumbs: idOf로 shard id를 만든다', () => {
+  const r = packThumbs(new Map(), { cardId: 'x', b64: 'AA' }, { shards: 3, idOf: (i) => 'gifs_' + i });
+  assert.deepEqual(r, { shardId: 'gifs_0' });
+});

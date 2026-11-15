@@ -1,11 +1,13 @@
 // 브라우저 전용 캔버스 그리기. 순수한 부분(그리는 순서, 카드 매트, 묶음 이름)은 drawplan.js에 두고 테스트한다.
 //
-// createRenderer({scene, thumbB64, theme}) -> {attach, setTargets, redraw, invalidateThumbs}
+// createRenderer({scene, thumbB64, theme, gifs, pageVisible}) -> {attach, setTargets, redraw, invalidateThumbs}
 // - scene() -> {cards, groups, view, selectedId, selectedGroupId, drag, mode, bg}.
 //   bg는 보드 배경('#rrggbb'). 없으면 테마 bg를 쓴다(theme.js boardTheme). 글 카드의 paper는 paperFor로 칠한다.
 //   drag.rect가 있으면 그 카드(또는 묶음)는 그 자리에 그린다. 묶음을 끌 때는 drag.cards의 자리에 카드를 그린다.
 // - thumbB64(cardId) -> Promise<string|null>. 썸네일 base64(data: 접두 없음).
 // - theme() -> THEMES의 한 값(theme.js). 그릴 때마다 묻는다.
+// - gifs: gifanim.js의 createGifPlayer. anim 카드는 썸네일 대신 지금 프레임을 그린다. 화면에 anim 카드가 있고
+//   표면과 페이지(pageVisible())가 보이는 동안만 약 30fps로 다시 그리고, 아니면 쉰다(animDelay).
 // - attach(surface|null): client.surfaces.on이 준 표면. visible이 false이면 그리기 루프를 멈춘다.
 // - setTargets(Map<cardId, rect>, animate): 카드의 목표 자리. animate이면 지금 자리에서 300ms ease-out으로 옮긴다.
 // - invalidateThumbs(): 썸네일 shard가 바뀌었을 때. 다음 그리기에서 base64 길이를 다시 보고 다르면 새로 디코드한다.
@@ -19,6 +21,7 @@
 import { toScreen } from './layout.js';
 import { THEMES, groupDotColor, boardTheme, paperFor } from './theme.js';
 import { cropSourceRect, cropImageRect, CROP_HINT } from './crop.js';
+import { animDelay } from './gifanim.js';
 import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle, cardLabel, cardMemo, wrapLines } from './drawplan.js';
 
 const ANIM_MS = 300;
@@ -88,10 +91,22 @@ function setLetterSpacing(ctx, v) {
   if ('letterSpacing' in ctx) ctx.letterSpacing = v;
 }
 
-export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) {
+const docVisible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+
+// 사진 카드에서 그릴 원본 사각형(원본 픽셀). 카드 crop {x,y,w,h}(0..1, crop.js)를 그림 크기에 맞춰 바꾼다.
+// 정지 썸네일과 GIF 프레임이 같은 길을 지나므로 움직이는 GIF도 자른 대로 그린다. 자르지 않았으면 그림 전체.
+export function photoSource(card, img) {
+  const w = img.naturalWidth || img.displayWidth || img.width;
+  const h = img.naturalHeight || img.displayHeight || img.height;
+  return cropSourceRect(card?.crop, w, h);
+}
+
+export function createRenderer({ scene, thumbB64, theme = () => THEMES.light, gifs = null, pageVisible = docVisible }) {
   let surface = null;
   let onResize = null;
   let raf = 0;
+  let animTimer = 0;
+  let animOnScreen = 0; // 마지막 그리기에서 화면에 있던 anim 카드 수
   let targets = new Map();
   let anim = null; // {from: Map, start}
   let thumbGen = 0;
@@ -132,6 +147,8 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
   function stop() {
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
+    clearTimeout(animTimer);
+    animTimer = 0;
   }
 
   function frame() {
@@ -141,6 +158,11 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     draw(t);
     if (anim && t - anim.start < ANIM_MS) schedule();
     else anim = null;
+    // 움직이는 GIF: 다음 프레임을 약 30fps로 잡는다. 화면에 없거나 숨으면 잡지 않는다.
+    const wait = animDelay({
+      animating: animOnScreen > 0, surfaceVisible: surface.visible, pageVisible: pageVisible(), sinceLastMs: now() - t,
+    });
+    if (wait !== null && !animTimer) animTimer = setTimeout(() => { animTimer = 0; schedule(); }, wait);
   }
 
   function bitmapFor(card) {
@@ -255,11 +277,16 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
 
   // --- 카드 ---
 
-  function drawCover(ctx, bmp, s, crop) {
-    const { sx, sy, sw, sh } = cropSourceRect(crop, bmp.width, bmp.height);
-    const k = Math.max(s.w / sw, s.h / sh);
-    const w = sw * k, h = sh * k;
-    ctx.drawImage(bmp, sx, sy, sw, sh, s.x + (s.w - w) / 2, s.y + (s.h - h) / 2, w, h);
+  function drawCover(ctx, img, s, src) {
+    if (!(src.sw > 0 && src.sh > 0)) return;
+    const k = Math.max(s.w / src.sw, s.h / src.sh);
+    const w = src.sw * k, h = src.sh * k;
+    ctx.drawImage(img, src.sx, src.sy, src.sw, src.sh, s.x + (s.w - w) / 2, s.y + (s.h - h) / 2, w, h);
+  }
+
+  // 사진 카드에 그릴 그림. anim 카드는 GIF의 지금 프레임(준비 전에는 정지 썸네일).
+  function photoImage(card, t) {
+    return (card.anim && gifs?.frame(card, t)) || bitmapFor(card);
   }
 
   function drawText(ctx, th, card, s) {
@@ -351,7 +378,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     ctx.fillText(ellipsize(ctx, card.note, s.w - 12), s.x + 6, s.y + s.h - h / 2);
   }
 
-  function drawCard(ctx, th, card, s, scale) {
+  function drawCard(ctx, th, card, s, scale, t) {
     const ch = cardChrome(th, card, s, scale, measure);
     const o = ch.outer, inner = ch.inner;
     ctx.save();
@@ -392,8 +419,8 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     if (card.hasThumb) {
       ctx.fillStyle = th.loadingBg;
       ctx.fillRect(inner.x, inner.y, inner.w, inner.h);
-      const bmp = bitmapFor(card);
-      if (bmp) drawCover(ctx, bmp, inner, card.crop);
+      const img = photoImage(card, t);
+      if (img) drawCover(ctx, img, inner, photoSource(card, img));
     } else if (card.kind === 'text') drawText(ctx, th, card, inner);
     else if (card.kind === 'link' || card.kind === 'youtube' || card.kind === 'pinterest') drawLink(ctx, th, card, inner);
     else drawPlaceholder(ctx, th, card, inner);
@@ -512,6 +539,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
       drag?.groupId === g.id && drag.moved && (drag.kind === 'group' || drag.kind === 'group_resize') ? drag.rect : g.rect;
     const offscreen = (s) => s.x > cssWidth || s.y > cssHeight || s.x + s.w < 0 || s.y + s.h < 0;
 
+    const animIds = new Set();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     for (const item of drawList({ ...sc, cards, groups })) {
       if (item.kind === 'background') {
@@ -530,7 +558,8 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
         if (!r) continue;
         const s = toScreen(view, r);
         if (offscreen(s)) continue;
-        drawCard(ctx, th, card, s, view.scale);
+        if (card.anim && card.hasThumb) animIds.add(card.id);
+        drawCard(ctx, th, card, s, view.scale, t);
       } else if (item.kind === 'selection') {
         if (sc.crop && item.target === 'card' && item.id === sc.crop.id) continue;
         if (item.target === 'card') {
@@ -549,6 +578,9 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     const ccard = crop && cardsById.get(crop.id);
     const cr = ccard && cardRect(ccard);
     if (cr) cropLayout = drawCrop(ctx, th, ccard, toScreen(view, cr), view.scale, crop, cssWidth, cssHeight);
+    // 화면 밖으로 나간 GIF의 디코더와 프레임은 놓는다.
+    animOnScreen = animIds.size;
+    gifs?.retain(animIds);
   }
 
   return {

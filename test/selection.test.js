@@ -109,3 +109,24 @@ test('viewCenter: view 상태의 가운데, 없거나 틀리면 기본 자리', 
   assert.deepEqual(viewCenter(null), { ...DEFAULT_CENTER, scale: 1 });
   assert.deepEqual(viewCenter({ cx: 10, cy: 20, scale: 0 }), { ...DEFAULT_CENTER, scale: 1 });
 });
+
+// --- collectCard ---
+
+import { collectCard } from '../src/selection.js';
+
+test('collectCard: 썸네일, 움직이는 GIF, 원본을 걷고 실패는 삼킨다', async () => {
+  const log = [];
+  const store = (name, fail) => ({ remove: async (id) => { log.push([name, id]); if (fail) throw new Error('x'); } });
+  const jobs = collectCard(
+    { id: 'c1', hasThumb: true, anim: true, origKey: 'orig/c1.gif' },
+    { thumbs: store('thumbs'), gifs: store('gifs', true), blobs: store('blobs') },
+  );
+  await Promise.all(jobs);
+  assert.deepEqual(log, [['thumbs', 'c1'], ['gifs', 'c1'], ['blobs', 'orig/c1.gif']]);
+  // 썸네일 없는 카드: 썸네일은 건드리지 않지만 gif는(사본이 남았을 수 있어) 지운다
+  log.length = 0;
+  await Promise.all(collectCard({ id: 'c2' }, { thumbs: store('thumbs'), gifs: store('gifs'), blobs: store('blobs') }));
+  assert.deepEqual(log, [['gifs', 'c2']]);
+  // 동기적으로 던져도 괜찮다
+  assert.doesNotThrow(() => collectCard({ id: 'c3', hasThumb: true }, { thumbs: { remove() { throw new Error('y'); } } }));
+});

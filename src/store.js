@@ -97,7 +97,13 @@ export async function saveWithRetry(adapter, mutate, opts = {}) {
 
 // --- 썸네일 shard ---
 
-export const shardIdOf = (i) => 'thumbs_' + String(i).padStart(3, '0');
+// shard id. 썸네일은 thumbs_000..127, 움직이는 GIF는 gifs_00..31. 모양(cardId → "<writtenAtMs>:<base64>")과
+// 1,000,000바이트 한도는 같고 접두와 자릿수, 개수만 다르다.
+export const THUMB_STORE = Object.freeze({ prefix: 'thumbs_', pad: 3, shards: 128 });
+export const GIF_STORE = Object.freeze({ prefix: 'gifs_', pad: 2, shards: 32 });
+export const shardIdFor = (prefix, pad) => (i) => prefix + String(i).padStart(pad, '0');
+export const shardIdOf = shardIdFor(THUMB_STORE.prefix, THUMB_STORE.pad);
+export const gifShardIdOf = shardIdFor(GIF_STORE.prefix, GIF_STORE.pad);
 
 // JSON.stringify 결과 문자열의 UTF-8 바이트 수. stringify가 외톨이 surrogate를
 // 이스케이프하므로 surrogate는 항상 짝으로 온다.
@@ -135,14 +141,14 @@ function shardBytes(map, replaceKey, replaceVal) {
 
 // 넣을 수 있는 가장 낮은 번호의 shard. 이미 들어 있는 카드면 그 shard에 맞는지 먼저 본다.
 // skip에 든 shard(아직 못 읽은 shard)는 고르지 않는다.
-export function packThumbs(existing, add, { shardLimit = 1_000_000, shards = 128, skip } = {}) {
+export function packThumbs(existing, add, { shardLimit = 1_000_000, shards = 128, skip, idOf = shardIdOf } = {}) {
   const fits = (id) => !skip?.has(id) && shardBytes(existing.get(id), add.cardId, add.b64) <= shardLimit;
   for (let i = 0; i < shards; i++) {
-    const id = shardIdOf(i);
+    const id = idOf(i);
     if (existing.get(id)?.has(add.cardId) && fits(id)) return { shardId: id };
   }
   for (let i = 0; i < shards; i++) {
-    const id = shardIdOf(i);
+    const id = idOf(i);
     if (fits(id)) return { shardId: id };
   }
   return { error: 'full' };
@@ -160,7 +166,7 @@ export function parseThumb(v) {
 }
 export const stampThumb = (t, b64) => `${t}:${b64}`;
 
-// ThumbStore.
+// ThumbStore. prefix와 pad로 shard id를 정한다(기본 thumbs_000.., GIF_STORE를 펼쳐 주면 gifs_00..).
 // - 모든 shard 쓰기는 읽고-고치고-쓰기다. adapter.get으로 그 shard를 새로 읽고, 추가나 삭제 하나만
 //   적용하고, 크기(접두 포함 저장 값의 JSON.stringify 바이트)를 shardLimit로 다시 잰 뒤 adapter.set 한다.
 //   메모리 캐시로 덮어쓰지 않으므로 onStorageChange 등으로 기준 판이 앞서가도 다른 PC의 썸네일을 지우지 않는다.
@@ -171,8 +177,11 @@ export const stampThumb = (t, b64) => `${t}:${b64}`;
 // - reload(shardId, value)는 다른 PC의 변경을 받아 그 shard의 캐시와, 그 shard에 걸린 카드의 색인만 다시 만든다.
 // - 시작할 때 읽지 못한 shard는 missing()에 남는다. 그 shard는 reload로 값을 받을 때까지 새 썸네일을 받지 않는다.
 //   읽은 shard가 모두 찼는데 못 읽은 shard가 남아 있으면 put은 {error:'full'} 대신 'thumbs loading' 오류를 던진다.
-export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_000_000, now = Date.now } = {}) {
-  const ids = Array.from({ length: shards }, (_, i) => shardIdOf(i));
+export async function createThumbStore(adapter, {
+  shards = THUMB_STORE.shards, shardLimit = 1_000_000, now = Date.now, prefix = THUMB_STORE.prefix, pad = THUMB_STORE.pad,
+} = {}) {
+  const idOf = shardIdFor(prefix, pad);
+  const ids = Array.from({ length: shards }, (_, i) => idOf(i));
   const cache = new Map(); // shardId -> Map<cardId, 저장 값>
   const index = new Map(); // cardId -> 이기는 사본의 shardId
   const unloaded = new Set(); // 아직 읽지 못한 shardId
@@ -274,7 +283,7 @@ export async function createThumbStore(adapter, { shards = 128, shardLimit = 1_0
       // 새 사본이 반드시 이기도록 아는 사본들보다 큰 시각을 쓴다.
       const known = holders(cardId).reduce((t, id) => Math.max(t, stampIn(id, cardId)), -1);
       const value = stampThumb(Math.max(now(), known + 1), b64);
-      const r = packThumbs(cache, { cardId, b64: value }, { shards, shardLimit, skip: unloaded });
+      const r = packThumbs(cache, { cardId, b64: value }, { shards, shardLimit, skip: unloaded, idOf });
       if (r.error) {
         if (unloaded.size) throw new Error('thumbs loading');
         return r;

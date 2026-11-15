@@ -6,7 +6,7 @@
 
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
-import { BOARDS_ENTRY, shardIdOf, createThumbStore } from './store.js';
+import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore } from './store.js';
 import { createDocEditor, cardTextPatch, MEMO_MAX } from './patches.js';
 import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
@@ -14,7 +14,7 @@ import { placeNear } from './interaction.js';
 import { DROP_STATE, DROP_ACK, createReceiver, dropPlacement } from './dropxfer.js';
 import { THEMES, themeName } from './theme.js';
 import {
-  normSelected, resolveSelected, deleteCardPatches, deleteGroupPatches, staleTombstones, viewCenter,
+  normSelected, resolveSelected, deleteCardPatches, deleteGroupPatches, staleTombstones, viewCenter, collectCard,
 } from './selection.js';
 import { createGate, retryRead, createSaver } from './startup.js';
 import { panelOutputs, MEMO_KINDS, boardOutputs } from './panel.js';
@@ -50,6 +50,7 @@ let selectedGroupId = null; // 선택한 묶음. selectedId와 함께 참이 되
 let boardState; // 마지막으로 쓴 창 상태 board
 let notice = null;
 let thumbs = null;
+let gifs = null; // 움직이는 GIF 원본 저장소(gifs_00..31). 준비되기 전에 넣은 GIF는 정지 카드가 된다
 let loaded = false; // boards를 한 번이라도 읽었는가
 let loadingNotice = LOADING_NOTICE; // 시작 읽기가 다 끝날 때까지 notice 아래에 깔린다
 const ready = createGate(); // boards와 썸네일 저장소가 준비되면 열린다
@@ -267,17 +268,16 @@ darkQuery?.addEventListener?.('change', (e) => setTheme(themeName(!!e.matches)))
 
 // 지운 카드의 썸네일과 원본은 묘비가 된 지 7일이 지나고 여전히 묘비일 때만 걷어낸다.
 // 묘비는 병합에서 뒤집힐 수 있다(다른 PC나 sandbox의 더 늦은 편집). 7일 안에 되살려도 잃는 것이 없다.
-// 시작할 때와 그다음 한 시간마다 돈다. 썸네일 저장소가 준비된 뒤에만 돈다.
+// 시작할 때와 그다음 한 시간마다 돈다. 썸네일과 GIF 저장소가 준비된 뒤에만 돈다.
 const GC_EVERY_MS = 3600 * 1000;
 const collected = new Set(); // 이번 세션에 걷어낸 카드
 function collectGarbage() {
-  if (!loaded || !thumbs) return;
+  if (!loaded || !thumbs || !gifs) return;
   for (const c of staleTombstones(ed.doc, Date.now())) {
     if (collected.has(c.id)) continue;
     collected.add(c.id);
     // 공간 정리는 실패해도 괜찮다.
-    if (c.hasThumb) thumbs.remove(c.id).catch(() => {});
-    if (c.origKey) p.blobs.remove(c.origKey).catch(() => {});
+    collectCard(c, { thumbs, gifs, blobs: p.blobs });
   }
 }
 
@@ -308,6 +308,7 @@ function ingestDeps() {
     blobPut: (key, fileId) => p.blobs.put(key, fileId),
     makeThumb,
     thumbs,
+    gifs,
     now: Date.now,
     placeAt: () => placeNear({ x: c.x, y: c.y, scale: c.scale }, { w: 0, h: 0 }),
     httpRead: (permission, path, query) => p.http.read(permission, path, query),
@@ -677,12 +678,20 @@ p.handle('export', async () => {
         const v = await thumbs.get(c.id).catch(() => null);
         if (v) thumbB64.set(c.id, v);
       }
+      // 움직이는 GIF 카드는 JPEG 대신 GIF를 싣는다(뷰어의 <img>에서 움직인다).
+      const gifB64 = new Map();
+      for (const c of cards) {
+        if (!c.anim || !c.hasThumb || !gifs) continue;
+        const v = await gifs.get(c.id).catch(() => null);
+        if (v) gifB64.set(c.id, v);
+      }
       const origs = new Map();
       for (const c of cards) {
         if (c.kind === 'video' && c.includeVideo) origs.set(c.id, await openOrig(c.origKey));
       }
       const plan = planExport(b, {
         thumbSizes: new Map([...thumbB64].map(([id, v]) => [id, (v.length * 3) / 4])),
+        gifSizes: new Map([...gifB64].map(([id, v]) => [id, (v.length * 3) / 4])),
         origSizes: new Map([...origs].map(([id, f]) => [id, f ? f.size : null])),
       });
       const msg = exportMessages(b, plan);
@@ -690,6 +699,7 @@ p.handle('export', async () => {
       if (msg.notice) { setNotice(msg.notice); return; }
       const readers = {
         thumb: async (id) => thumbB64.get(id) ?? null,
+        gif: async (id) => gifB64.get(id) ?? null,
         video: async (id) => {
           const f = origs.get(id);
           return f ? p.files.read(f.id) : null;
@@ -753,6 +763,27 @@ for (let i = 0; i < SHARDS; i++) {
   }, () => { /* 시작 읽기의 재시도가 알린다 */ });
 }
 
+// GIF shard도 같은 식으로 받는다. 옆 칸은 blob이나 썸네일을 보이므로 다시 그릴 것은 없다.
+const pendingGifs = new Map();
+for (let i = 0; i < GIF_STORE.shards; i++) {
+  const id = gifShardIdOf(i);
+  p.storage.watch(id, (value) => {
+    if (!gifs) { pendingGifs.set(id, value); return; }
+    gifs.reload(id, value);
+  }, () => {});
+}
+
+// GIF 저장소는 썸네일과 따로 연다. 시작 알림과 넣기 대기(ready)를 늦추지 않는다.
+async function startGifs() {
+  gifs = await createThumbStore(p.storage, { ...GIF_STORE });
+  for (const [id, value] of pendingGifs) gifs.reload(id, value);
+  pendingGifs.clear();
+  collectGarbage();
+  await Promise.all(gifs.missing().map((id) => retryRead(() => p.storage.get(id), {
+    stop: () => !gifs.missing().includes(id),
+  }).then((r) => { if (!r.stopped) gifs.reload(id, r.value); })));
+}
+
 let retrying = false;
 function updateLoading() {
   const done = loaded && thumbs && thumbs.missing().length === 0;
@@ -777,6 +808,7 @@ async function start() {
   const boardsLoad = retryRead(() => p.storage.get(BOARDS_ENTRY), { onFail: onReadFail, stop: () => loaded })
     .then((r) => { if (!r.stopped) finishBoardsLoad(r.value); updateLoading(); });
 
+  startGifs().catch(() => { /* GIF는 정지 썸네일로 남는다 */ });
   // 읽은 shard만으로 저장소를 만든다. 못 읽은 shard는 읽힐 때까지 쓰기를 받지 않는다.
   thumbs = await createThumbStore(p.storage, { shards: SHARDS });
   for (const [id, value] of pendingShards) thumbs.reload(id, value);

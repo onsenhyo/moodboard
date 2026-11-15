@@ -7,6 +7,7 @@
 // deleteCardPatches(board, id) -> patch[]: 카드를 묘비(deleted: true)로 만드는 패치(patches.js). 없으면 [].
 // deleteGroupPatches(board, id) -> patch[]: 묶음은 묘비, 안의 카드는 groupId 키를 지운다(카드는 남는다).
 // staleTombstones(doc, now, minAgeMs) -> card[]: 지운 지 7일(기본) 넘은 카드 묘비.
+// collectCard(card, {thumbs, gifs, blobs}) -> Promise[]: 묘비 카드 하나의 썸네일, 움직이는 GIF, 원본을 걷는다.
 // viewCenter(view) -> {x, y}: 창 상태 view {cx, cy, scale}의 가운데. 없으면 기본 자리.
 
 export const DEFAULT_CENTER = Object.freeze({ x: 480, y: 300 });
@@ -61,6 +62,17 @@ export function staleTombstones(doc, now, minAgeMs = GC_AGE_MS) {
     }
   }
   return out;
+}
+
+// 묘비 카드 하나의 저장 공간을 걷어낸다. 실패는 삼킨다(다음 세션에 다시 걷는다).
+// GIF는 anim이 없어도 지운다(병합으로 필드가 빠졌어도 남은 사본을 걷는다. 없으면 아무 일도 없다).
+export function collectCard(card, { thumbs, gifs, blobs } = {}) {
+  const jobs = [];
+  const run = (fn) => { try { jobs.push(Promise.resolve(fn()).catch(() => {})); } catch { /* 무시 */ } };
+  if (card.hasThumb && thumbs) run(() => thumbs.remove(card.id));
+  if (gifs) run(() => gifs.remove(card.id));
+  if (card.origKey && blobs) run(() => blobs.remove(card.origKey));
+  return jobs;
 }
 
 export function viewCenter(view) {

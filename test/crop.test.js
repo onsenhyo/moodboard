@@ -121,3 +121,12 @@ test('createCropTracker: 처음 값은 건너뛰고 n이 바뀔 때만 id', () =
   assert.equal(next({ n: 3 }), null);
   assert.equal(createCropTracker(null)({ id: 'x', n: 9 }), 'x');
 });
+
+test('photoSource: 정지 썸네일과 GIF 프레임 모두 card.crop 비율로 원본 사각형을 낸다', async () => {
+  const { photoSource } = await import('../src/render.js');
+  const crop = { x: 0.25, y: 0.1, w: 0.5, h: 0.8 };
+  // ImageBitmap(정지 썸네일)은 width/height, VideoFrame(GIF 프레임)은 displayWidth/displayHeight
+  assert.deepEqual(photoSource({ crop }, { width: 200, height: 100 }), { sx: 50, sy: 10, sw: 100, sh: 80 });
+  assert.deepEqual(photoSource({ anim: true, crop }, { displayWidth: 400, displayHeight: 200 }), { sx: 100, sy: 20, sw: 200, sh: 160 });
+  assert.deepEqual(photoSource({ anim: true }, { displayWidth: 40, displayHeight: 30 }), { sx: 0, sy: 0, sw: 40, sh: 30 });
+});
