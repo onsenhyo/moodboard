@@ -22,6 +22,8 @@
    이전 `dist/assets.json`과 sha256을 견줘 바뀐 자산을 고른다.
 3. `node scripts/gen-app.mjs` → `app/moodboard.json`. `dist/assets.json`의 자산과 판을 모두 선언하므로 build 뒤에 돌린다.
    지금 판: moodboard 12, manifest 1, client 조각 1, board 조각 1, export 2.
+   앱 아이콘 `moodboard-icon`(svg, `assets/icon.svg`)은 빌드 산출물이 아니라 gen-app.mjs의 `ICON`에서 판을 정한다.
+   그림을 바꾸면 그 판을 1 올린다.
 4. MCP `upload_asset`을 자산마다: id, version, format, sha256은 1의 값, data_base64는 `.b64` 내용.
 5. MCP `preview_app`(definition = `app/moodboard.json`) — 오류와 warnings가 없어야 한다.
 6. MCP `upload_app`(같은 definition) — `open_sent_to`가 1 이상인지 본다.
@@ -31,3 +33,10 @@
 - 권한 id는 소문자·숫자·`-`만, client 출력·동작 이름은 소문자·숫자·`_`만 된다.
 - client 동작(`{"client":…}`)은 동작 목록에 섞지 못한다. 단독으로 쓴다.
 - 저장 스키마를 바꾸면 `src/model.js`·`src/ingest.js`가 쓰는 카드 필드를 모두 적었는지 확인한다.
+
+스토어(kaleidoscope-appstore)에 올리기
+- `node scripts/store.mjs <스토어 클론>/apps/moodboard [게시자 GitHub 로그인]` — app.json, store.json,
+  assets/<id>.javascript(`.upload.js` 원본 바이트), assets/icon.svg를 쓴다. 게시자를 빼면 `PUBLISHER_PLACEHOLDER`.
+- 스토어 정보나 자산이 바뀌면 store.mjs의 `RELEASE`를 정확히 1 올린다.
+- 검사는 커밋을 읽으므로 스토어 클론에서 커밋(또는 임시 commit-tree) 뒤
+  `node tools/check.mjs --base origin/main --head <커밋> --author <게시자>`. `--all`은 R2 접속 설정이 있어야 돈다.
