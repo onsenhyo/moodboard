@@ -114,3 +114,22 @@ test('panelOutputs: 글 카드의 종이 색. 없으면 기본 종이 색을 보
   assert.equal(EMPTY_PANEL.sel_paper, '#ffffff');
   assert.deepEqual(Object.keys(set).sort(), Object.keys(EMPTY_PANEL).sort());
 });
+
+test('panelOutputs: 이름은 모든 카드, 메모 입력칸은 사진·영상·유튜브·핀터레스트·링크만', () => {
+  const img = panelOutputs({ kind: 'image', title: 'a.jpg', label: '바다', memo: '메모' });
+  assert.equal(img.sel_title, 'a.jpg');
+  assert.equal(img.sel_label, '바다');
+  assert.equal(img.sel_heading, '바다');
+  assert.equal(img.sel_memo, '메모');
+  assert.equal(img.has_memo_input, true);
+  for (const kind of ['video', 'youtube', 'pinterest', 'link']) assert.equal(panelOutputs({ kind }).has_memo_input, true, kind);
+  const txt = panelOutputs({ kind: 'text', title: '글', memo: 'x' });
+  assert.equal(txt.has_memo_input, false);
+  assert.equal(txt.sel_memo, '');
+  assert.equal(txt.sel_heading, '글');
+  assert.equal(txt.sel_label, '');
+  assert.deepEqual(Object.keys(txt).sort(), Object.keys(EMPTY_PANEL).sort());
+  const g = panelOutputs({ group: { id: 'g', name: 'n', count: 1 } });
+  assert.equal(g.has_memo_input, false);
+  assert.equal(g.sel_label, '');
+});

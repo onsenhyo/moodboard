@@ -17,8 +17,17 @@
 // - save(): saveWithRetry로 새로 읽은 값에 줄의 패치를 적용해 쓴다. 충돌하면 다시 읽고 같은 패치를 다시 적용한다.
 // - writeNow(): 읽기 없이 마지막으로 받은 값에 패치를 적용해 바로 setStorage한다(창을 닫을 때 첫 시도).
 // - pending: 아직 저장하지 않은 패치 수.
+// cardTextPatch(boardId, id, field, value, max) -> 카드 label·memo 패치(빈 값이면 키 지우기).
 
 import { BOARDS_ENTRY, saveWithRetry, pruneTombstones } from './store.js';
+
+// 카드 글 필드 하나(label, memo)를 고치는 패치. 앞뒤 공백을 지운 값이 비면 키를 지운다(스키마는 null을 받지 않는다).
+// max가 있으면 글자(code point) 수를 그만큼으로 자른다.
+export const MEMO_MAX = 500;
+export function cardTextPatch(boardId, id, field, value, max = Infinity) {
+  const v = [...String(value ?? '').trim()].slice(0, max).join('').trim();
+  return v ? { kind: 'card', boardId, id, fields: { [field]: v } } : { kind: 'card', boardId, id, deleteKeys: [field] };
+}
 
 const emptyDoc = () => ({ version: 1, boards: [] });
 const normDoc = (d) => (d && typeof d === 'object' && Array.isArray(d.boards) ? d : emptyDoc());

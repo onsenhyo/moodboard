@@ -7,7 +7,7 @@
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
 import { BOARDS_ENTRY, shardIdOf, createThumbStore } from './store.js';
-import { createDocEditor } from './patches.js';
+import { createDocEditor, cardTextPatch, MEMO_MAX } from './patches.js';
 import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
 import { placeNear } from './interaction.js';
@@ -16,7 +16,7 @@ import {
   normSelected, resolveSelected, deleteCardPatches, deleteGroupPatches, staleTombstones, viewCenter,
 } from './selection.js';
 import { createGate, retryRead, createSaver } from './startup.js';
-import { panelOutputs } from './panel.js';
+import { panelOutputs, MEMO_KINDS } from './panel.js';
 import { createPreview } from './preview.js';
 
 const PREVIEW_SURFACE = 'preview';
@@ -180,6 +180,8 @@ async function publishSelected() {
     id: c.id,
     kind: c.kind,
     title: c.title ?? '',
+    label: c.label ?? null,
+    memo: c.memo ?? null,
     url: c.url ?? null,
     text: c.text ?? null,
     color: c.color,
@@ -479,6 +481,23 @@ p.handle('set_text', ({ event } = {}) => {
   publishSelected();
   clearNotice();
 });
+
+// 카드 이름(label)과 메모(memo). 빈 값이면 키를 지운다. 이름은 Enter, 메모는 입력칸을 떠날 때 온다.
+function setCardText(field, event, max) {
+  const c = cardById(selectedId);
+  if (!c || typeof event !== 'string' || (field === 'memo' && !MEMO_KINDS.has(c.kind))) return;
+  const patch = cardTextPatch(boardId, c.id, field, event, max);
+  if (patch.fields ? patch.fields[field] !== c[field] : field in c) {
+    ed.edit(patch);
+    refresh();
+    scheduleSave();
+  }
+  publishSelected();
+  clearNotice();
+}
+
+p.handle('set_card_label', ({ event } = {}) => setCardText('label', event));
+p.handle('set_card_memo', ({ event } = {}) => setCardText('memo', event, MEMO_MAX));
 
 p.handle('toggle_include_video', async ({ event } = {}) => {
   const c = cardById(selectedId);

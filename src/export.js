@@ -103,6 +103,9 @@ function viewerCard(board, c, embedded) {
   if (c.url) out.url = c.url;
   if (typeof c.text === 'string') out.text = c.text;
   if (c.note) out.note = c.note;
+  // 사용자가 붙인 이름과 메모. 빈 값은 저장하지 않으므로 글이 있을 때만 싣는다.
+  if (typeof c.label === 'string' && c.label) out.label = c.label;
+  if (typeof c.memo === 'string' && c.memo) out.memo = c.memo;
   if (c.kind === 'text' && isHex(c.paper)) out.paper = c.paper;
   if (c.kind === 'video') out.video = embedded.has(c.id);
   return out;
@@ -132,9 +135,14 @@ html,body{margin:0;height:100%;overflow:hidden;background:#f7f3f7;color:#302a36;
 .card{position:absolute;overflow:hidden;cursor:pointer;user-select:none}
 .card.anim,.group.anim{transition:left .3s cubic-bezier(.33,1,.68,1),top .3s cubic-bezier(.33,1,.68,1),width .3s cubic-bezier(.33,1,.68,1),height .3s cubic-bezier(.33,1,.68,1)}
 .card.hidden,.group.hidden{display:none}
-.card .pic{position:absolute;inset:0;overflow:hidden}
+.card.photo{display:flex;flex-direction:column}
+.card .pic{position:relative;flex:1 1 0;min-height:0;overflow:hidden}
+.card .foot{flex:0 1 auto;min-height:0;overflow:hidden}
 .card img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
-.card .cap{position:absolute;left:8px;bottom:5px;white-space:nowrap}
+.card .cap{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .memo{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:pre-wrap;word-break:break-all}
+.card .ph .memo{margin-top:6px}
+#lb .meta .memo{white-space:pre-wrap}
 .card .ph{position:absolute;inset:0;padding:14px;white-space:pre-wrap;word-break:break-word;overflow:hidden}
 .card .ph b{display:block;margin-bottom:4px}
 .card.link .ph,.card.placeholder .ph{padding-top:34px}

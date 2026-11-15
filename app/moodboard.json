@@ -72,15 +72,15 @@
   "assets": [
     {
       "id": "moodboard",
-      "version": 9
+      "version": 10
     },
     {
       "id": "moodboard-board",
-      "version": 2
+      "version": 3
     },
     {
       "id": "moodboard-export",
-      "version": 1
+      "version": 2
     }
   ],
   "storage": {
@@ -199,6 +199,12 @@
                         },
                         "deleted": {
                           "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "memo": {
+                          "type": "string"
                         }
                       },
                       "additionalProperties": false
@@ -2068,7 +2074,7 @@
     "runtime": "javascript",
     "entry": {
       "id": "moodboard",
-      "version": 9
+      "version": 10
     },
     "outputs": {
       "selected": {
@@ -2121,6 +2127,18 @@
       },
       "sel_note": {
         "default": null
+      },
+      "sel_heading": {
+        "default": ""
+      },
+      "sel_label": {
+        "default": ""
+      },
+      "sel_memo": {
+        "default": ""
+      },
+      "has_memo_input": {
+        "default": false
       },
       "sel_has_note": {
         "default": false
@@ -2212,7 +2230,9 @@
       "set_board_bg",
       "reset_board_bg",
       "set_text_paper",
-      "reset_text_paper"
+      "reset_text_paper",
+      "set_card_label",
+      "set_card_memo"
     ],
     "state_keys": [
       "draft",
@@ -2815,7 +2835,43 @@
                       "type": "text",
                       "style": "title",
                       "value": {
+                        "client": "sel_heading"
+                      }
+                    },
+                    {
+                      "type": "input",
+                      "label": "이름",
+                      "label_position": "top",
+                      "placeholder": {
                         "client": "sel_title"
+                      },
+                      "value": {
+                        "client": "sel_label"
+                      },
+                      "commit": "submit",
+                      "on_change": {
+                        "client": "set_card_label"
+                      }
+                    },
+                    {
+                      "type": "when",
+                      "value": {
+                        "client": "has_memo_input"
+                      },
+                      "child": {
+                        "type": "input",
+                        "label": "메모",
+                        "label_position": "top",
+                        "multiline": true,
+                        "rows": 3,
+                        "placeholder": "메모 (500자까지)",
+                        "value": {
+                          "client": "sel_memo"
+                        },
+                        "commit": "blur",
+                        "on_change": {
+                          "client": "set_card_memo"
+                        }
                       }
                     },
                     {

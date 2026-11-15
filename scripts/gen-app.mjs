@@ -1,7 +1,7 @@
 // app/moodboard.json을 만든다. 썸네일 저장 항목 128개를 손으로 쓰지 않으려고 둔 스크립트다.
 // 사용: node scripts/gen-app.mjs [client 판] [board 판] [export 판]
 //   client는 자산 moodboard(dist/moodboard.upload.js), board는 moodboard-board(dist/board.html),
-//   export는 moodboard-export(dist/export.upload.js). 기본값 8 1 1. 올린 판과 맞춘다.
+//   export는 moodboard-export(dist/export.upload.js). 기본값 10 3 2. 올린 판과 맞춘다.
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ASSET_ID = 'moodboard';
 const BOARD_ASSET = 'moodboard-board';
 const EXPORT_ASSET = 'moodboard-export'; // src/main.js의 EXPORT_ASSET과 같아야 한다.
-const [ASSET_VERSION, BOARD_VERSION, EXPORT_VERSION] = [8, 1, 1].map((d, i) => Number(process.argv[2 + i] ?? d));
+const [ASSET_VERSION, BOARD_VERSION, EXPORT_VERSION] = [10, 3, 2].map((d, i) => Number(process.argv[2 + i] ?? d));
 const SHARDS = 128; // src/main.js와 src/board/board.js의 SHARDS와 같아야 한다.
 
 for (const v of [ASSET_VERSION, BOARD_VERSION, EXPORT_VERSION]) {
@@ -50,6 +50,8 @@ const cardSchema = {
     groupId: str, // 묶음 id. 묶음 밖이면 필드가 없다
     paper: str, // 글 카드 종이 색 '#rrggbb'. 기본(테마 textBg)이면 필드가 없다
     deleted: bool,
+    label: str, // 사용자가 붙인 이름. 없으면 필드가 없고 title을 쓴다
+    memo: str, // 메모(500자까지). 없으면 필드가 없다
   },
   additionalProperties: false,
 };
@@ -139,6 +141,11 @@ const outputs = {
   sel_kind: null,
   sel_title: '',
   sel_note: null,
+  // 4차: 카드 이름과 메모
+  sel_heading: '',
+  sel_label: '',
+  sel_memo: '',
+  has_memo_input: false,
   sel_has_note: false,
   sel_image: null,
   sel_show_image: false,
@@ -170,6 +177,7 @@ const actions = [
   'delete_selected', 'set_text_color', 'set_text', 'toggle_include_video', 'board_select', 'board_new',
   'board_rename', 'export', 'group_add', 'group_rename', 'group_delete',
   'set_board_bg', 'reset_board_bg', 'set_text_paper', 'reset_text_paper',
+  'set_card_label', 'set_card_memo',
 ];
 
 // --- 창 상태 ---
@@ -225,7 +233,17 @@ const toolbar = {
 const detail = {
   type: 'stack', direction: 'column', gap: 'small',
   children: [
-    { type: 'text', style: 'title', value: c('sel_title') },
+    { type: 'text', style: 'title', value: c('sel_heading') },
+    // 이름: Enter로 바꾼다. 비우고 Enter면 원래 제목(placeholder)으로 돌아간다.
+    {
+      type: 'input', label: '이름', label_position: 'top', placeholder: c('sel_title'),
+      value: c('sel_label'), commit: 'submit', on_change: c('set_card_label'),
+    },
+    // 메모: 여러 줄이라 Enter는 줄바꿈이다. 입력칸을 떠날 때(blur) 저장한다.
+    when('has_memo_input', {
+      type: 'input', label: '메모', label_position: 'top', multiline: true, rows: 3,
+      placeholder: '메모 (500자까지)', value: c('sel_memo'), commit: 'blur', on_change: c('set_card_memo'),
+    }),
     when('sel_has_note', { type: 'text', style: 'meta', value: c('sel_note') }),
     // 이미지·핀터레스트: 원본이 이 PC에 있으면 blob, 없으면 썸네일을 미리보기 canvas에 그린다(image는 data: 주소를 받지 않는다).
     when('sel_show_image', { type: 'image', src: c('sel_image'), fit: 'contain', zoom: true }),

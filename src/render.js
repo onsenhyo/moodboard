@@ -14,7 +14,7 @@
 
 import { toScreen } from './layout.js';
 import { THEMES, groupDotColor, boardTheme, paperFor } from './theme.js';
-import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle } from './drawplan.js';
+import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle, cardLabel, cardMemo, wrapLines } from './drawplan.js';
 
 const ANIM_MS = 300;
 const HANDLE_PX = 12;
@@ -91,6 +91,20 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
   let anim = null; // {from: Map, start}
   let thumbGen = 0;
   const bitmaps = new Map(); // cardId -> {len, bmp, gen, pending}
+  // 배율 1 글꼴의 글 폭. 아랫단 줄 나누기가 프레임마다 재므로 모아 둔다.
+  const widths = new Map();
+  let mctx = null;
+  const measure = (text, font) => {
+    const key = font + '\n' + text;
+    let w = widths.get(key);
+    if (w === undefined) {
+      if (widths.size > 20000) widths.clear();
+      mctx.font = font;
+      w = mctx.measureText(text).width;
+      widths.set(key, w);
+    }
+    return w;
+  };
 
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -272,19 +286,26 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     }
   }
 
+  // 링크 카드: 이름(label, 없으면 주소의 host), 주소, 메모 2줄을 가운데에 쌓는다.
   function drawLink(ctx, th, card, s) {
     ctx.fillStyle = th.linkBg;
     ctx.fillRect(s.x, s.y, s.w, s.h);
     if (th.linkBorder) strokeInside(ctx, th.linkBorder, s);
     if (s.w < 40 || s.h < 30) return;
-    const pad = 10;
+    const pad = 10, w = s.w - pad * 2;
+    ctx.font = th.memoFont;
+    const memo = wrapLines(cardMemo(card), w, 2, (t) => ctx.measureText(t).width);
+    const top = s.y + s.h / 2 - 18 - (memo.length * 13) / 2;
     ctx.textBaseline = 'top';
     ctx.fillStyle = th.linkInk;
     ctx.font = th.linkTitleFont;
-    ctx.fillText(ellipsize(ctx, hostOf(card.url) || card.title, s.w - pad * 2), s.x + pad, s.y + s.h / 2 - 18);
+    ctx.fillText(ellipsize(ctx, cardLabel(card) || hostOf(card.url) || card.title, w), s.x + pad, top);
     ctx.fillStyle = th.linkMuted;
     ctx.font = th.linkUrlFont;
-    ctx.fillText(ellipsize(ctx, card.url, s.w - pad * 2), s.x + pad, s.y + s.h / 2 + 2);
+    ctx.fillText(ellipsize(ctx, card.url, w), s.x + pad, top + 20);
+    ctx.font = th.memoFont;
+    ctx.fillStyle = th.memoColor;
+    memo.forEach((l, i) => ctx.fillText(l, s.x + pad, top + 38 + i * 13));
   }
 
   function drawPlaceholder(ctx, th, card, s) {
@@ -324,7 +345,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
   }
 
   function drawCard(ctx, th, card, s, scale) {
-    const ch = cardChrome(th, card, s, scale);
+    const ch = cardChrome(th, card, s, scale, measure);
     const o = ch.outer, inner = ch.inner;
     ctx.save();
     // 그림자: 겹마다 같은 사각형을 한 번씩 칠한다.
@@ -339,15 +360,22 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 0;
     if (!ch.shadows.length) ctx.fillRect(o.x, o.y, o.w, o.h);
-    if (ch.caption && th.captionColor) {
+    // 아랫단: 다크 띠를 칠하고, 캡션과 메모를 카드 안에 잘라 쓴다.
+    if (ch.foot) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(o.x, o.y, o.w, o.h);
       ctx.clip();
-      ctx.fillStyle = th.captionColor;
-      ctx.font = th.captionFont;
-      ctx.textBaseline = 'alphabetic';
-      ctx.fillText(ellipsize(ctx, ch.caption.text, inner.w), ch.caption.x, ch.caption.y);
+      if (ch.foot.bg) {
+        ctx.fillStyle = ch.foot.bg;
+        ctx.fillRect(ch.foot.x, ch.foot.y, ch.foot.w, ch.foot.h);
+      }
+      ctx.textBaseline = 'middle';
+      for (const l of ch.lines) {
+        ctx.font = l.font;
+        ctx.fillStyle = l.color;
+        ctx.fillText(l.text, l.x, l.y);
+      }
       ctx.restore();
     }
     // 내용은 카드(매트 안쪽) 밖으로 나가지 않게 자른다.
@@ -406,6 +434,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
     const { canvas, cssWidth, cssHeight, dpr } = surface;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    mctx = ctx;
     const sc = scene();
     const th = boardTheme(theme() ?? THEMES.light, sc.bg);
     const view = sc.view;

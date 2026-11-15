@@ -5,7 +5,11 @@ export const EMPTY_PANEL = Object.freeze({
   sel_has: false,
   sel_none: true,
   sel_kind: null,
-  sel_title: '',
+  sel_title: '', // 카드의 원래 제목(이름 입력칸의 placeholder)
+  sel_heading: '', // 옆 칸 머리: 이름(label)이 있으면 이름, 없으면 제목
+  sel_label: '', // 이름 입력칸 값. label이 없으면 ''
+  sel_memo: '', // 메모 입력칸 값. memo가 없으면 ''
+  has_memo_input: false, // 메모 입력칸을 보이는 종류인가(MEMO_KINDS)
   sel_note: null,
   sel_has_note: false,
   sel_image: null, // 이미지 원본 {blob}
@@ -29,6 +33,9 @@ export const EMPTY_PANEL = Object.freeze({
 });
 
 const HEX = /^#[0-9a-f]{6}$/i;
+// 메모 입력칸을 두는 종류. 글 카드는 글을 바로 고치므로 메모가 없다.
+export const MEMO_KINDS = new Set(['image', 'video', 'youtube', 'pinterest', 'link']);
+const str = (v) => (typeof v === 'string' ? v : '');
 const isHttps = (u) => typeof u === 'string' && /^https:\/\/\S+$/i.test(u);
 
 // sel: null(고른 것 없음) | {group:{id, name, count}}(묶음) | 카드 선택 객체.
@@ -56,6 +63,10 @@ export function panelOutputs(sel) {
     sel_none: false,
     sel_kind: kind,
     sel_title: sel.title ?? '',
+    sel_heading: str(sel.label).trim() || (sel.title ?? ''),
+    sel_label: str(sel.label),
+    sel_memo: MEMO_KINDS.has(kind) ? str(sel.memo) : '',
+    has_memo_input: MEMO_KINDS.has(kind),
     sel_note: note,
     sel_has_note: !!note,
     sel_image: origImage,

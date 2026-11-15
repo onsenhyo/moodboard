@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPatch, applyPatches, mergePatch, createDocEditor } from '../src/patches.js';
+import { applyPatch, applyPatches, mergePatch, createDocEditor, cardTextPatch, MEMO_MAX } from '../src/patches.js';
 
 const base = () => ({
   version: 1,
@@ -151,4 +151,33 @@ test('editor.writeNow: 읽지 않고 마지막 값에 얹어 바로 쓴다', asy
   await ed.writeNow();
   assert.deepEqual(store.value.boards[0].cards[0].manual, move.fields.manual);
   assert.equal(ed.pending, 0);
+});
+
+test('cardTextPatch: label과 memo를 쓰고, 빈 값이나 공백이면 키를 지운다', () => {
+  const d = base();
+  const x = () => d.boards[0].cards[0];
+  applyPatch(d, { ...cardTextPatch('b', 'x', 'label', '  바다 사진 '), t: 5 });
+  applyPatch(d, { ...cardTextPatch('b', 'x', 'memo', '첫 줄\n둘째 줄', MEMO_MAX), t: 6 });
+  assert.equal(x().label, '바다 사진');
+  assert.equal(x().memo, '첫 줄\n둘째 줄');
+  assert.equal(x().updatedAt, 6);
+  assert.deepEqual(cardTextPatch('b', 'x', 'label', ''), { kind: 'card', boardId: 'b', id: 'x', deleteKeys: ['label'] });
+  applyPatch(d, { ...cardTextPatch('b', 'x', 'label', ''), t: 7 });
+  applyPatch(d, { ...cardTextPatch('b', 'x', 'memo', '  \n '), t: 8 });
+  assert.ok(!('label' in x()) && !('memo' in x()));
+  assert.equal(x().color, '#111111', '다른 필드는 그대로');
+});
+
+test('cardTextPatch: memo는 500자(code point)까지 자른다', () => {
+  const p = cardTextPatch('b', 'x', 'memo', '😀'.repeat(600), MEMO_MAX);
+  assert.equal(MEMO_MAX, 500);
+  assert.equal([...p.fields.memo].length, 500);
+});
+
+test('cardTextPatch: 한 프레임이 이름을 쓰고 다른 프레임이 옮겨도 둘 다 남는다, 이어서 지우기는 하나로 합친다', () => {
+  const merged = mergePatch({ ...cardTextPatch('b', 'x', 'label', 'a'), t: 1 }, { ...cardTextPatch('b', 'x', 'label', ''), t: 2 });
+  assert.deepEqual(merged, { kind: 'card', boardId: 'b', id: 'x', t: 2, deleteKeys: ['label'] });
+  const d = applyPatches(base(), [move, { ...cardTextPatch('b', 'x', 'label', '이름'), t: 11 }]);
+  assert.equal(d.boards[0].cards[0].label, '이름');
+  assert.equal(d.boards[0].cards[0].manual.x, 300);
 });

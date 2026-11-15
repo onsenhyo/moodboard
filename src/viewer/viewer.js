@@ -8,7 +8,7 @@
 import { sortedLayout, SORT_CELL, SORT_GAP, GROUP_TITLE_PX } from '../layout.js';
 import { sortCols, zoomAt, fitView } from '../interaction.js';
 import { THEMES, themeName, groupDotColor, boardTheme, paperFor } from '../theme.js';
-import { captionFor } from '../drawplan.js';
+import { captionFor, cardLabel, cardMemo, FOOT } from '../drawplan.js';
 
 const BADGE = { youtube: '▶', video: '🎞', pinterest: '📌', text: '✎', link: '🔗' };
 const LINK_KINDS = new Set(['youtube', 'pinterest', 'link']);
@@ -24,7 +24,7 @@ const shadowCss = (list) => (list ?? []).map((s) => `0 ${s.y}px ${s.blur}px ${s.
 function themeCss(t) {
   const pad = t.mat ? t.mat.pad : 0;
   const bottom = t.mat ? t.mat.bottom : 0;
-  const capBottom = t.mat ? t.mat.captionBottom ?? t.mat.bottom : 0;
+  const fx = t.mat ? FOOT.xMat : FOOT.xStrip;
   const grid = t.grid
     ? `background-image:radial-gradient(circle,${t.grid.dot} ${t.grid.r}px,transparent ${t.grid.r + 0.5}px);`
     : 'background-image:none;';
@@ -44,10 +44,15 @@ function themeCss(t) {
     `.group .gdot{display:${t.groupDot ? 'block' : 'none'}}`,
     `.card{box-shadow:${lined(t.border)};background:${t.placeholderBg}}`,
     `.card.photo{box-shadow:${shadow};background:${t.matBg ?? t.loadingBg}}`,
-    `.card.photo .pic{inset:${pad}px ${pad}px ${bottom}px ${pad}px;background:${t.loadingBg}}`,
-    `.card.photo.captioned .pic{bottom:${capBottom}px}`,
-    `.card.photo.captioned .note{bottom:${capBottom}px}`,
-    `.card .cap{display:${t.captionColor ? 'block' : 'none'};font:${t.captionFont};color:${t.captionColor ?? 'inherit'}}`,
+    // 사진 카드 아랫단(앱 캔버스 drawplan cardChrome과 같은 치수): 라이트는 매트 아랫단, 다크는 사진 아래 띠.
+    `.card.photo{padding:${pad}px ${pad}px ${bottom}px}`,
+    `.card.photo.footed{padding-bottom:0}`,
+    `.card .pic{background:${t.loadingBg}}`,
+    `.card .foot{padding:${FOOT.top}px ${fx}px ${FOOT.bottom}px;max-height:${FOOT.maxShare * 100}%;background:${t.stripBg ?? 'none'}}`,
+    `.card .foot.kindonly{display:${t.mat ? 'block' : 'none'}}`,
+    `.card .cap{font:${t.captionFont};color:${t.captionColor};height:${FOOT.capH}px;line-height:${FOOT.capH}px}`,
+    `.card .cap.label{color:${t.labelColor}}`,
+    `.card .memo{font:${t.memoFont};color:${t.memoColor};line-height:${FOOT.memoH}px}`,
     `.card .badge{left:${pad + 6}px;top:${pad + 6}px;background:${t.badgeBg};color:${t.badgeInk};font:${t.badgeFont}}`,
     `.card.text{background:${t.textBg};color:${t.textInk};box-shadow:${lined(t.textBorder)}}`,
     `.card.text .ph{font:${t.textFont};line-height:1.35;padding-left:${14 + (t.textAccentBar ? t.textAccentWidth : 0)}px}`,
@@ -58,7 +63,6 @@ function themeCss(t) {
     `.card.link .ph b{font:${t.linkTitleFont};color:${t.linkInk}}`,
     `.card.placeholder .ph{font:${t.placeholderFont};color:${t.placeholderInk}}`,
     `.card .note{background:${t.noteBg};color:${t.noteInk};font:${t.noteFont}}`,
-    `.card.photo .note{left:${pad}px;right:${pad}px;bottom:${bottom}px}`,
     `#lb .txt{background:${t.textBg};color:${t.textInk};font:${t.textFont}}`,
   ].join('\n');
 }
@@ -182,26 +186,35 @@ function start() {
     const src = c.hasThumb ? thumbUrl(c.id) : null;
     const color = HEX.test(c.color) ? c.color : '#9e9e9e';
     const type = src ? 'photo' : c.kind === 'text' ? 'text' : LINK_KINDS.has(c.kind) ? 'link' : 'placeholder';
+    const label = cardLabel(c), memo = cardMemo(c);
     const cap = type === 'photo' ? captionFor(c) : null;
-    const n = el('div', { class: `card ${type}${cap ? ' captioned' : ''}`, 'data-id': c.id, title: c.title || '' });
+    const footed = !!(cap || memo);
+    const n = el('div', { class: `card ${type}${type === 'photo' && footed ? ' footed' : ''}`, 'data-id': c.id, title: label || c.title || '' });
+    const memoEl = memo ? el('div', { class: 'memo', text: memo }) : null;
     if (type === 'photo') {
-      n.append(el('div', { class: 'pic' }, el('img', { src, alt: c.title || '', draggable: 'false' })));
-      if (cap) n.append(el('span', { class: 'cap', text: cap }));
+      n.append(el('div', { class: 'pic' }, el('img', { src, alt: label || c.title || '', draggable: 'false' }),
+        c.note ? el('div', { class: 'note', text: c.note }) : null));
+      // 종류 이름만 있는 아랫단은 다크에서 숨긴다(footText).
+      if (footed) {
+        n.append(el('div', { class: `foot${label || memo ? '' : ' kindonly'}` },
+          cap ? el('div', { class: `cap${label ? ' label' : ''}`, text: cap }) : null, memoEl));
+      }
     } else if (type === 'text') {
       n.append(el('span', { class: 'accent', style: `background:${color}` }));
       n.append(el('div', { class: 'ph', text: c.text ?? '' }));
       n.append(el('span', { class: 'tdot', style: `background:${color}` }));
       if (c.paper) paperNodes.push([n, c]);
     } else if (type === 'link') {
-      const ph = el('div', { class: 'ph' }, el('b', { text: c.title || hostOf(c.url) }));
+      const ph = el('div', { class: 'ph' }, el('b', { text: label || c.title || hostOf(c.url) }));
       ph.append(c.url ? `${hostOf(c.url)}\n${c.url}` : '');
+      if (memoEl) ph.append(memoEl);
       n.append(ph);
     } else {
       n.append(el('div', { class: 'ph', text: c.title || '' }));
     }
     // 글 카드는 색 띠/점으로 충분하므로 배지를 달지 않는다(목업과 같음).
     if (BADGE[c.kind] && type !== 'text') n.append(el('span', { class: 'badge', text: BADGE[c.kind] }));
-    if (c.note) n.append(el('div', { class: 'note', text: c.note }));
+    if (c.note && type !== 'photo') n.append(el('div', { class: 'note', text: c.note }));
     world.append(n);
     nodes.set(c.id, n);
   }
@@ -335,7 +348,9 @@ function start() {
     }
     else if (isrc) box.append(el('img', { src: isrc, alt: c.title || '' }));
     const meta = el('div', { class: 'meta' });
-    if (c.title) meta.append(el('span', { class: 'title', text: c.title }));
+    const title = cardLabel(c) || c.title;
+    if (title) meta.append(el('span', { class: 'title', text: title }));
+    if (cardMemo(c)) meta.append(el('span', { class: 'memo', text: cardMemo(c) }));
     if (c.note) meta.append(el('span', { text: c.note }));
     const href = LINK_KINDS.has(c.kind) && c.url ? safeUrl(c.url) : null;
     if (href) meta.append(el('a', { href, target: '_blank', rel: 'noopener', text: '원본 보기' }));

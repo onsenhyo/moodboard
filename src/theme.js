@@ -40,7 +40,12 @@ function make(k, o) {
     matBg: o.mat ? '#ffffff' : null,
     shadow: o.shadow,
     captionFont: `11px ${UI}`,
-    captionColor: o.mat ? k.muted : null, // 라이트 매트 아랫단에만 쓴다
+    captionColor: k.muted, // 종류 이름 캡션. 다크는 label이나 메모가 있어 띠가 생길 때만 쓴다(drawplan footText)
+    labelColor: k.text, // 사용자가 붙인 이름(label) 캡션
+    memoFont: `10px ${UI}`, // 메모: 캡션 아래 작은 흐린 글 2줄
+    memoColor: k.muted,
+    // 다크 사진 아래 띠: surface-solid 위에 surface-raised(흰색 11%)를 얹은 색. 라이트는 흰 매트 아랫단을 쓴다.
+    stripBg: o.stripBg ?? null,
     badgeBg: k.surfaceRaised,
     badgeInk: k.text,
     badgeFont: `600 10px ${UI}`,
@@ -99,6 +104,7 @@ const light = make(SHELL.light, {
 
 const dark = make(SHELL.dark, {
   mat: null,
+  stripBg: '#413a47', // #2a2230 + rgba(255,255,255,.11)
   shadow: [{ blur: 16, y: 6, color: 'rgba(0,0,0,.35)' }],
   textBg: '#342b3b',
   textBorder: null,
