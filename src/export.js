@@ -1,8 +1,11 @@
 // 단일 HTML 내보내기. 순수 모듈이며 Node에서 테스트한다.
 //
-// planExport(board, {thumbSizes, origSizes}) -> {estimate, level, videos}
-// buildExportChunks(board, plan, {thumb, video, viewerJs}) -> AsyncIterable<Uint8Array>
+// planExport(board, {thumbSizes, origSizes, gifSizes}) -> {estimate, level, videos}
+//   anim 카드는 gifSizes에 크기가 있으면 썸네일 대신 GIF 크기로 센다.
+// buildExportChunks(board, plan, {thumb, gif, video, viewerJs}) -> AsyncIterable<Uint8Array>
 //   thumb(cardId) -> Promise<base64|null>, video(cardId) -> Promise<ArrayBuffer|Uint8Array|null>,
+//   gif(cardId) -> Promise<base64|null>(없어도 된다). anim 카드는 GIF를 data-mime="image/gif"로 싣고
+//   뷰어가 <img>로 보여 움직인다. GIF를 못 읽으면 JPEG 썸네일을 싣는다.
 //   viewerJs는 src/viewer/viewer.js를 iife로 번들한 문자열(빌드 1단계의 dist/viewer.txt).
 // runExport({name, files, chunks}) -> {status:'done', name} | {status:'cancelled'}
 //
@@ -20,16 +23,17 @@ export const OVERHEAD_BYTES = 200_000;
 export const CHUNK_MAX = 4 * 1024 * 1024;
 export const NO_ORIG_REASON = '원본 없음';
 const VIDEO_MIME = 'video/mp4';
+const GIF_MIME = 'image/gif';
 const FALLBACK_NAME = '무드보드';
 
 const liveCards = (board) => (board?.cards ?? []).filter((c) => !c.deleted);
 const b64Len = (bytes) => (bytes * 4) / 3;
 
-export function planExport(board, { thumbSizes = new Map(), origSizes = new Map() } = {}) {
+export function planExport(board, { thumbSizes = new Map(), origSizes = new Map(), gifSizes = new Map() } = {}) {
   let raw = 0;
   const videos = [];
   for (const c of liveCards(board)) {
-    if (c.hasThumb) raw += thumbSizes.get(c.id) ?? 0;
+    if (c.hasThumb) raw += (c.anim && gifSizes.get(c.id)) || (thumbSizes.get(c.id) ?? 0);
     if (c.kind !== 'video' || !c.includeVideo) continue;
     const size = origSizes.get(c.id);
     if (typeof size === 'number' && size >= 0) {
@@ -195,7 +199,7 @@ function createPacker() {
 const VIDEO_SLICE = 3 * 1024 * 1024;
 
 export async function* buildExportChunks(board, plan, readers) {
-  const { thumb, video, viewerJs = '' } = readers;
+  const { thumb, gif, video, viewerJs = '' } = readers;
   const cards = liveCards(board);
   const embedIds = (plan?.videos ?? []).filter((v) => v.embed).map((v) => v.cardId);
   // 실제로 읽은 영상만 embedded로 표시해야 하므로 영상을 먼저 연다.
@@ -218,10 +222,12 @@ export async function* buildExportChunks(board, plan, readers) {
 
   for (const c of cards) {
     if (!c.hasThumb) continue;
-    const b64 = await thumb(c.id);
+    const g = c.anim && gif ? await gif(c.id) : null;
+    const b64 = typeof g === 'string' && g ? g : await thumb(c.id);
     if (typeof b64 !== 'string' || !b64) continue;
+    const mime = b64 === g ? ` data-mime="${GIF_MIME}"` : '';
     // base64에는 '<'가 없지만 저장 값이 깨졌을 때를 대비해 걸러 낸다.
-    yield* pack.add(`<script type="text/plain" data-thumb="${escapeHtml(c.id)}">${b64.replace(/[^A-Za-z0-9+/=]/g, '')}</script>\n`);
+    yield* pack.add(`<script type="text/plain" data-thumb="${escapeHtml(c.id)}"${mime}>${b64.replace(/[^A-Za-z0-9+/=]/g, '')}</script>\n`);
   }
 
   for (const [id, bytes] of videoData) {

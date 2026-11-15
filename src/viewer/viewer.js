@@ -110,7 +110,8 @@ function start() {
   const thumbs = readBlocks('data-thumb');
   const videos = readBlocks('data-video');
   const videoUrls = new Map();
-  const thumbUrl = (id) => (thumbs.has(id) ? `data:image/jpeg;base64,${thumbs.get(id).b64}` : null);
+  // anim 카드는 GIF(data-mime="image/gif")가 실려 <img>에서 움직인다. 나머지는 JPEG.
+  const thumbUrl = (id) => (thumbs.has(id) ? `data:${thumbs.get(id).mime === 'image/gif' ? 'image/gif' : 'image/jpeg'};base64,${thumbs.get(id).b64}` : null);
   const videoUrl = (id) => {
     if (!videos.has(id)) return null;
     if (!videoUrls.has(id)) videoUrls.set(id, b64ToBlobUrl(videos.get(id).b64, videos.get(id).mime));

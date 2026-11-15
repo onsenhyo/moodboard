@@ -5,6 +5,7 @@
 //   blobPut(key, fileId) -> Promise<void>,
 //   makeThumb(bytes, mime) -> Promise<{jpegB64, pixels, width?, height?}|null>,
 //   thumbs: ThumbStore,            // put(cardId, b64) -> {error:'full'} | undefined
+//   gifs: ThumbStore|null,         // 움직이는 GIF 원본(gifs_00..31). 없으면 GIF도 정지 썸네일만 둔다
 //   now() -> ms,
 //   placeAt() -> {x, y},
 //   httpRead(permission, path, query) -> Promise<{bytes: ArrayBuffer, mime}>,   // ingestText만
@@ -20,6 +21,9 @@ export const PIN_SHORT_NOTE = '브라우저 주소창의 주소를 넣어 주세
 const CARD_W = 240;
 const CARD_H = 180;
 const TITLE_MAX = 40;
+// 이 크기(원본 바이트) 이하의 GIF는 원본 base64를 gif 저장소에도 넣어 보드에서 움직인다.
+// base64로 933,336자라 접두를 붙여도 1,000,000바이트 shard 하나에 들어간다.
+export const GIF_ANIM_MAX = 700_000;
 const PIN_IMG_HOST = 'i.pinimg.com';
 const PIN_IMG_PREFIXES = ['/originals/', '/1200x/', '/736x/', '/564x/', '/474x/', '/236x/'];
 
@@ -83,6 +87,24 @@ async function putThumb(deps, cardId, b64) {
   }
 }
 
+function toBase64(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+// 작은 GIF의 원본을 gif 저장소에 넣는다. 넣었으면 참. 차거나 실패하면 정지 카드로 남긴다.
+async function putGif(deps, cardId, bytes) {
+  if (!deps.gifs || !bytes || bytes.byteLength > GIF_ANIM_MAX) return false;
+  try {
+    const r = await deps.gifs.put(cardId, toBase64(bytes));
+    return r?.error !== 'full';
+  } catch {
+    return false;
+  }
+}
+
 // --- 파일 ---
 
 export async function ingestFiles(files, deps) {
@@ -99,9 +121,10 @@ export async function ingestFiles(files, deps) {
     card.origKey = `orig/${card.id}.${extOf(f.name, mime)}`;
 
     let thumb = null;
+    let bytes = null;
     if (f.size !== 0) {
       try {
-        const bytes = await deps.readBytes(f.id);
+        bytes = await deps.readBytes(f.id);
         if (bytes && bytes.byteLength > 0) thumb = await safeThumb(deps, bytes, mime);
       } catch {
         thumb = null;
@@ -114,6 +137,8 @@ export async function ingestFiles(files, deps) {
       if (r === 'full') return { cards, full: true };
       hasThumb = r === 'ok';
     }
+    // 움직이는 GIF: 정지 썸네일은 그대로 두고 원본을 gif 저장소에 더 넣는다.
+    if (hasThumb && mime === 'image/gif' && (await putGif(deps, card.id, bytes))) card.anim = true;
 
     try {
       await deps.blobPut(card.origKey, f.id);

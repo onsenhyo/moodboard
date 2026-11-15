@@ -398,3 +398,37 @@ test('뷰어 번들이 bg와 paper를 읽는다', async () => {
   assert.match(js, /\.paper\b/);
   assert.match(js, /\.bg\b/);
 });
+
+// --- 움직이는 GIF ---
+
+test('planExport: anim 카드는 GIF 크기로 센다(없으면 썸네일)', () => {
+  const b = boardOf([
+    card('g1', 'image', { hasThumb: true, anim: true }),
+    card('g2', 'image', { hasThumb: true, anim: true }),
+    card('j1', 'image', { hasThumb: true }),
+  ]);
+  const thumbSizes = new Map([['g1', 10 * KB], ['g2', 10 * KB], ['j1', 10 * KB]]);
+  const gifSizes = new Map([['g1', 600 * KB], ['j1', 999 * KB]]);
+  const plan = planExport(b, { thumbSizes, gifSizes });
+  assert.equal(plan.estimate, Math.ceil(((600 + 10 + 10) * KB * 4) / 3) + OVERHEAD_BYTES);
+});
+
+test('buildExportChunks: anim 카드는 GIF를 image/gif로 싣고 뷰어가 <img>로 쓴다. GIF가 없으면 JPEG', async () => {
+  const gif = Buffer.from('GIF89a-fake').toString('base64');
+  const b = boardOf([
+    card('g1', 'image', { hasThumb: true, anim: true }),
+    card('g2', 'image', { hasThumb: true, anim: true }),
+    card('j1', 'image', { hasThumb: true }),
+  ]);
+  const plan = planExport(b, {});
+  const chunks = await collect(buildExportChunks(b, plan, {
+    thumb: async (id) => 'SlBH' + id.length, gif: async (id) => (id === 'g1' ? gif : null), video: async () => null,
+    viewerJs: await viewer(),
+  }));
+  const html = Buffer.concat(chunks).toString('utf8');
+  assert.match(html, new RegExp(`<script type="text/plain" data-thumb="g1" data-mime="image/gif">${gif}</script>`));
+  assert.match(html, /<script type="text\/plain" data-thumb="g2">SlBH2<\/script>/);
+  assert.match(html, /<script type="text\/plain" data-thumb="j1">SlBH2<\/script>/);
+  // 뷰어는 data-mime이 image/gif일 때만 data:image/gif로 만든다
+  assert.match(await viewer(), /image\/gif/);
+});
