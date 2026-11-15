@@ -54,6 +54,13 @@ const cardSchema = {
     deleted: bool,
     label: str, // 사용자가 붙인 이름. 없으면 필드가 없고 title을 쓴다
     memo: str, // 메모(500자까지). 없으면 필드가 없다
+    // 자르기(src/crop.js): 원본 그림에 대한 0~1 비율. 자르지 않았으면 필드가 없다
+    crop: {
+      type: 'object',
+      required: ['x', 'y', 'w', 'h'],
+      properties: { x: num, y: num, w: num, h: num },
+      additionalProperties: false,
+    },
   },
   additionalProperties: false,
 };
@@ -175,6 +182,9 @@ const outputs = {
   has_board_bg: false,
   sel_paper: '#ffffff', // 옆 칸 [종이 색]. 카드 paper가 없으면 테마 textBg
   has_text_paper: false,
+  // 카드 자르기(src/crop.js, src/panel.js)
+  can_crop: false,
+  has_crop: false,
 };
 
 const actions = [
@@ -183,11 +193,13 @@ const actions = [
   'board_rename', 'export', 'group_add', 'group_rename', 'group_delete',
   'set_board_bg', 'reset_board_bg', 'set_text_paper', 'reset_text_paper',
   'set_card_label', 'set_card_memo', 'board_delete',
+  'crop_start', 'crop_clear',
 ];
 
 // --- 창 상태 ---
-// board(client가 씀), mode·cmd(툴바 → client가 씀), selected(보드가 쓰고 client도 씀), view·paste_inbox(보드가 씀).
-const BOARD_STATE = ['board', 'selected', 'view', 'mode', 'cmd', 'paste_inbox'];
+// board(client가 씀), mode·cmd(툴바 → client가 씀), selected(보드가 쓰고 client도 씀), view·paste_inbox(보드가 씀),
+// crop_target {id, n}(옆 칸 [자르기] → client가 씀, 보드가 n이 바뀌면 자르기 화면을 연다).
+const BOARD_STATE = ['board', 'selected', 'view', 'mode', 'cmd', 'paste_inbox', 'crop_target'];
 
 // --- 화면 ---
 
@@ -280,6 +292,9 @@ const detail = {
       placeholder: '메모 (500자까지)', value: c('sel_memo'), commit: 'debounce', on_change: c('set_card_memo'),
     }),
     when('sel_has_note', { type: 'text', style: 'meta', value: c('sel_note') }),
+    // 자르기: 보드에서 사진을 두 번 눌러도 연다(src/board/board.js).
+    when('can_crop', { type: 'button', label: '자르기', icon: 'crop', on_click: c('crop_start') }),
+    when('has_crop', { type: 'button', label: '자르기 해제', on_click: c('crop_clear') }),
     // 이미지·핀터레스트: 원본이 이 PC에 있으면 blob, 없으면 썸네일을 미리보기 canvas에 그린다(image는 data: 주소를 받지 않는다).
     when('sel_show_image', { type: 'image', src: c('sel_image'), fit: 'contain', zoom: true }),
     when('sel_thumb_preview', { type: 'canvas', surface: 'preview', aspect_ratio: 1.333, description: c('sel_title') }),
@@ -389,7 +404,7 @@ const app = {
   ],
   state: {
     draft: '', board_name: '', board: null, yt_embed: null, rename_open: false, board_menu_open: false, delete_open: false, group_name: '', theme: 'light',
-    selected: null, view: null, mode: 'manual', cmd: null, paste_inbox: null,
+    selected: null, view: null, mode: 'manual', cmd: null, paste_inbox: null, crop_target: null,
   },
   assets: ASSETS,
   storage: { entries: [boardsEntry, ...thumbEntries] },

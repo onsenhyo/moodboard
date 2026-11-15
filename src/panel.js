@@ -30,6 +30,8 @@ export const EMPTY_PANEL = Object.freeze({
   sel_openable: false,
   group_selected: null, // {id, name, count}
   has_group_selected: false,
+  can_crop: false, // [자르기]: 썸네일로 그리는 사진 카드(crop.js canCrop)
+  has_crop: false, // [자르기 해제]: 카드에 crop이 있다
 });
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -87,6 +89,8 @@ export function panelOutputs(sel) {
     sel_openable: kind !== 'text' && kind !== 'image' && kind !== 'video' && isHttps(sel.url),
     group_selected: null,
     has_group_selected: false,
+    can_crop: !!sel.canCrop,
+    has_crop: !!sel.canCrop && !!sel.hasCrop,
   };
 }
 

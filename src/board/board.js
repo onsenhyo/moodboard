@@ -3,14 +3,18 @@
 // 브리지: window.kaleidoscope (kaleidoscope ui/src/blocks/sandbox-frame.ts)
 // - storage boards, thumbs_000..127을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).
 // - 창 상태
-//   읽기: board(지금 보드 id, client가 씀), mode('manual'|'sorted'), cmd({op, n}, n이 바뀔 때만 실행), selected
+//   읽기: board(지금 보드 id, client가 씀), mode('manual'|'sorted'), cmd({op, n}, n이 바뀔 때만 실행), selected,
+//         crop_target({id, n}, n이 바뀌면 그 카드의 자르기 화면을 연다. 사진 카드를 두 번 눌러도 연다)
 //   쓰기: selected {kind, id}|null, view {cx, cy, scale}(200ms 모음), paste_inbox {text, n}
 // - 보드 편집은 패치로 쌓아(patches.js) 새로 읽은 값에 적용해 쓴다. 손을 뗄 때와 키로 지울 때 바로 저장하고,
 //   창을 닫거나 숨길 때(pagehide, visibilitychange) 남은 패치를 바로 쓴다.
 // - 입력: 포인터(interaction.js), wheel(이동), ctrl+wheel과 gesture*(확대), Delete/Backspace, Esc, 붙여넣기.
 
-import { reduce, initialState, zoomAt, fitView, sortCols } from '../interaction.js';
-import { sortedLayout, SORT_CELL, SORT_GAP } from '../layout.js';
+import { reduce, initialState, zoomAt, fitView, sortCols, rectOf, visibleCards } from '../interaction.js';
+import { sortedLayout, SORT_CELL, SORT_GAP, toWorld, hitTest } from '../layout.js';
+import {
+  canCrop, normCrop, FULL_CROP, cropHandleAt, dragCrop, cropPatch, uncropPatch, isFull, createCropTracker,
+} from '../crop.js';
 import { createRenderer } from '../render.js';
 import { THEMES, themeName, boardTheme } from '../theme.js';
 import { BOARDS_ENTRY, shardIdOf, createThumbStore, isConflict } from '../store.js';
@@ -26,6 +30,7 @@ const CLOSE_TRIES = 3;
 const VIEW_MS = 200;
 const ZOOM_STEP = 1.25;
 const TOAST_MS = 2400;
+const CROP_HANDLE_PX = 10; // 손잡이를 잡는 거리(화면 px)
 
 const k = window.kaleidoscope;
 
@@ -77,6 +82,8 @@ let selected = normSelected(k.getState('selected'));
 let thumbs = null;
 let loaded = false;
 let viewRestored = false;
+// 자르기 화면. {id, base(들어올 때의 crop), rect(지금 고른 사각형), drag: {handle, x, y, rect0, pointerId}|null}
+let crop = null;
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 let themeKey = themeName(darkQuery.matches);
 
@@ -92,6 +99,7 @@ const renderer = createRenderer({
   scene: () => ({
     cards: ui.cards, groups: ui.groups, view: ui.view, selectedId: selCard(), selectedGroupId: selGroup(),
     drag: ui.drag, mode: ui.mode, bg: board()?.bg,
+    crop: crop ? { id: crop.id, base: crop.base, rect: crop.rect } : null,
   }),
   thumbB64: (id) => (thumbs ? thumbs.get(id) : Promise.resolve(null)),
   theme: () => THEMES[themeKey],
@@ -129,6 +137,7 @@ function refresh(animate) {
   const cards = liveCards();
   const sorted = sortedLayout(cards, { cols: sortCols(cards.length), cell: SORT_CELL, gap: SORT_GAP });
   ui = { ...ui, cards, groups: liveGroups(board()), sorted };
+  if (crop && !canCrop(cardById(crop.id))) crop = null;
   renderer.setTargets(targets(), animate);
   paintChrome();
 }
@@ -215,6 +224,84 @@ function setView(view) {
   if (!viewTimer) viewTimer = setTimeout(writeView, VIEW_MS);
 }
 
+// --- 자르기 ---
+
+function enterCrop(id) {
+  const card = cardById(id);
+  if (!canCrop(card)) return;
+  if (ui.drag) onPointer({ phase: 'cancel', pointer_id: ui.drag.pointerId });
+  const base = normCrop(card.crop) ?? { ...FULL_CROP };
+  crop = { id, base, rect: { ...base }, drag: null };
+  select({ kind: 'card', id });
+  focusPasteBox();
+  renderer.redraw();
+}
+
+function cancelCrop() {
+  crop = null;
+  canvas.style.cursor = '';
+  renderer.redraw();
+}
+
+function applyCrop() {
+  const c = crop;
+  crop = null;
+  canvas.style.cursor = '';
+  const card = c && cardById(c.id);
+  const size = card && renderer.thumbSize(card.id);
+  if (!card || !size) { renderer.redraw(); return; }
+  const before = normCrop(card.crop);
+  const next = normCrop(c.rect);
+  if (!next && !before) { renderer.redraw(); return; }
+  const patch = isFull(c.rect)
+    ? uncropPatch(board().id, card, size.width, size.height)
+    : cropPatch(board().id, card, c.rect, size.width, size.height);
+  ed.edit(patch);
+  refresh(false);
+  save();
+}
+
+const localPx = (e) => {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+};
+const inside = (p, r) => p.x >= r.x && p.y >= r.y && p.x <= r.x + r.w && p.y <= r.y + r.h;
+
+function cropDown(e) {
+  const lay = renderer.cropLayout();
+  if (!lay) return;
+  const p = localPx(e);
+  const handle = cropHandleOf(lay, p);
+  if (handle) {
+    crop.drag = { handle, x: p.x, y: p.y, rect0: { ...crop.rect }, pointerId: e.pointerId };
+    return;
+  }
+  if (!inside(p, lay.card) && !inside(p, lay.img)) applyCrop();
+}
+
+const CURSORS = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', move: 'move' };
+const cropHandleOf = (lay, p) => cropHandleAt(crop.rect, (p.x - lay.img.x) / lay.img.w, (p.y - lay.img.y) / lay.img.h,
+  CROP_HANDLE_PX / lay.img.w, CROP_HANDLE_PX / lay.img.h);
+
+function cropMove(e) {
+  const d = crop?.drag;
+  const lay = renderer.cropLayout();
+  if (!lay) return;
+  const p = localPx(e);
+  if (!d) { canvas.style.cursor = CURSORS[cropHandleOf(lay, p)] ?? ''; return; }
+  if (e.pointerId !== d.pointerId) return;
+  crop.rect = dragCrop(d.rect0, d.handle, (p.x - d.x) / lay.img.w, (p.y - d.y) / lay.img.h);
+  renderer.redraw();
+}
+
+canvas.addEventListener('dblclick', (e) => {
+  if (crop) return;
+  const p = localPx(e);
+  const st = { ...ui, size: size() };
+  const hit = hitTest(visibleCards(st), (c) => rectOf(st, c), toWorld(ui.view, p), ui.view.scale);
+  if (hit && canCrop(hit.card)) enterCrop(hit.card.id);
+});
+
 // --- 포인터 ---
 
 function pointerEvent(phase, e) {
@@ -269,15 +356,24 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   focusPasteBox();
   try { canvas.setPointerCapture(e.pointerId); } catch { /* 이미 놓친 포인터 */ }
+  // 자르기 화면에서는 다른 포인터 조작을 받지 않는다.
+  if (crop) { cropDown(e); return; }
   onPointer(pointerEvent('down', e));
 });
-canvas.addEventListener('pointermove', (e) => { if (ui.drag) onPointer(pointerEvent('move', e)); });
+canvas.addEventListener('pointermove', (e) => {
+  if (crop) { cropMove(e); return; }
+  if (ui.drag) onPointer(pointerEvent('move', e));
+});
 // mousedown의 기본 동작이 초점을 옮길 수 있으므로 손을 뗄 때 한 번 더 준다.
 canvas.addEventListener('pointerup', (e) => {
   focusPasteBox();
+  if (crop) { cropMove(e); if (crop) crop.drag = null; return; }
   if (ui.drag) onPointer(pointerEvent('up', e));
 });
-canvas.addEventListener('pointercancel', (e) => { if (ui.drag) onPointer(pointerEvent('cancel', e)); });
+canvas.addEventListener('pointercancel', (e) => {
+  if (crop) { crop.drag = null; return; }
+  if (ui.drag) onPointer(pointerEvent('cancel', e));
+});
 
 // --- wheel과 집기 ---
 
@@ -324,6 +420,13 @@ function deleteSelected() {
 }
 
 window.addEventListener('keydown', (e) => {
+  if (crop) {
+    // 자르기 화면: Enter 적용, Esc 취소. 지우기 같은 다른 키는 받지 않는다.
+    if (e.key === 'Enter') { e.preventDefault(); applyCrop(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancelCrop(); }
+    else if (e.key === 'Delete' || e.key === 'Backspace') e.preventDefault();
+    return;
+  }
   const t = e.target;
   // 붙여넣기 받이는 비어 있는 동안 편집 중이 아니다(지우기와 Esc를 보드가 받는다).
   const editing = t === pasteBox
@@ -350,6 +453,7 @@ document.addEventListener('paste', (e) => {
 // --- 창 상태 ---
 
 const nextCmd = createCmdTracker(k.getState('cmd'));
+const nextCrop = createCropTracker(k.getState('crop_target'));
 
 function runCmd(op) {
   const s = size();
@@ -369,6 +473,7 @@ function applyBoard(id) {
   const next = typeof id === 'string' ? id : null;
   if (next === boardId) return;
   boardId = next;
+  crop = null;
   ui = { ...ui, drag: null };
   refresh(false);
 }
@@ -380,6 +485,8 @@ function onState(state) {
   if (JSON.stringify(sel) !== JSON.stringify(selected)) { selected = sel; renderer.redraw(); }
   const op = nextCmd(state.cmd);
   if (op) runCmd(op);
+  const cropId = nextCrop(state.crop_target);
+  if (cropId) enterCrop(cropId);
 }
 k.onStateChange(onState);
 

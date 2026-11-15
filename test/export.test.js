@@ -146,7 +146,7 @@ const videoBytes = Uint8Array.from({ length: 5 * 1024 * 1024 + 7 }, (_, i) => (i
 
 function fixture() {
   const cards = [
-    card('img-1', 'image', { hasThumb: true, color: '#3366ff', label: '바다 </script>', memo: '첫 줄\n둘째 줄' }),
+    card('img-1', 'image', { hasThumb: true, color: '#3366ff', label: '바다 </script>', memo: '첫 줄\n둘째 줄', crop: { x: 0.1, y: 0.2, w: 0.5, h: 0.4 } }),
     card('yt-1', 'youtube', { hasThumb: true, url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', color: '#cc0000' }),
     card('pin-1', 'pinterest', { hasThumb: true, url: 'https://www.pinterest.com/pin/123/', note: '메모' }),
     card('txt-1', 'text', { text: '</script><script>alert(1)</script> & <b>', color: '#00aa00' }),
@@ -222,6 +222,9 @@ test('buildExportChunks: 이어 붙이면 외부 요청 없는 단일 HTML, 조�
   assert.equal(data.cards.find((c) => c.id === 'img-1').memo, '첫 줄\n둘째 줄');
   assert.ok(!('label' in data.cards.find((c) => c.id === 'yt-1')));
   assert.ok(!('memo' in data.cards.find((c) => c.id === 'yt-1')));
+  // 자르기는 그대로 싣고, 자르지 않은 카드에는 키가 없다
+  assert.deepEqual(data.cards.find((c) => c.id === 'img-1').crop, { x: 0.1, y: 0.2, w: 0.5, h: 0.4 });
+  assert.ok(!('crop' in data.cards.find((c) => c.id === 'yt-1')));
 
   for (let i = 0; i < nThumbs; i++) {
     const [, attrs, body] = scripts[1 + i];

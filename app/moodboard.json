@@ -69,7 +69,8 @@
     "view": null,
     "mode": "manual",
     "cmd": null,
-    "paste_inbox": null
+    "paste_inbox": null,
+    "crop_target": null
   },
   "assets": [
     {
@@ -223,6 +224,30 @@
                         },
                         "memo": {
                           "type": "string"
+                        },
+                        "crop": {
+                          "type": "object",
+                          "required": [
+                            "x",
+                            "y",
+                            "w",
+                            "h"
+                          ],
+                          "properties": {
+                            "x": {
+                              "type": "number"
+                            },
+                            "y": {
+                              "type": "number"
+                            },
+                            "w": {
+                              "type": "number"
+                            },
+                            "h": {
+                              "type": "number"
+                            }
+                          },
+                          "additionalProperties": false
                         }
                       },
                       "additionalProperties": false
@@ -2229,6 +2254,12 @@
       },
       "has_text_paper": {
         "default": false
+      },
+      "can_crop": {
+        "default": false
+      },
+      "has_crop": {
+        "default": false
       }
     },
     "actions": [
@@ -2257,7 +2288,9 @@
       "reset_text_paper",
       "set_card_label",
       "set_card_memo",
-      "board_delete"
+      "board_delete",
+      "crop_start",
+      "crop_clear"
     ],
     "state_keys": [
       "draft",
@@ -2273,7 +2306,8 @@
       "view",
       "mode",
       "cmd",
-      "paste_inbox"
+      "paste_inbox",
+      "crop_target"
     ],
     "storage_entries": [
       "boards",
@@ -2655,7 +2689,8 @@
               "view",
               "mode",
               "cmd",
-              "paste_inbox"
+              "paste_inbox",
+              "crop_target"
             ],
             "storage_entries": [
               "boards",
@@ -2905,6 +2940,33 @@
                         "style": "meta",
                         "value": {
                           "client": "sel_note"
+                        }
+                      }
+                    },
+                    {
+                      "type": "when",
+                      "value": {
+                        "client": "can_crop"
+                      },
+                      "child": {
+                        "type": "button",
+                        "label": "자르기",
+                        "icon": "crop",
+                        "on_click": {
+                          "client": "crop_start"
+                        }
+                      }
+                    },
+                    {
+                      "type": "when",
+                      "value": {
+                        "client": "has_crop"
+                      },
+                      "child": {
+                        "type": "button",
+                        "label": "자르기 해제",
+                        "on_click": {
+                          "client": "crop_clear"
                         }
                       }
                     },

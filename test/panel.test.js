@@ -149,3 +149,11 @@ test('boardOutputs: 지운 보드는 고르기에서 빼고, 삭제 확인 글�
   assert.equal(boardOutputs(boards, 'gone').board_label, '');
   assert.deepEqual(boardOutputs(null, null).board_options, []);
 });
+
+test('panelOutputs: 자르기 단추는 사진 카드에, 해제는 자른 카드에', () => {
+  assert.equal(panelOutputs({ kind: 'image', canCrop: true }).can_crop, true);
+  assert.equal(panelOutputs({ kind: 'image', canCrop: true }).has_crop, false);
+  assert.equal(panelOutputs({ kind: 'youtube', canCrop: true, hasCrop: true }).has_crop, true);
+  assert.equal(panelOutputs({ kind: 'text', canCrop: false, hasCrop: true }).has_crop, false);
+  assert.equal(panelOutputs(null).can_crop, false);
+});

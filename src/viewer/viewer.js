@@ -9,6 +9,7 @@ import { sortedLayout, SORT_CELL, SORT_GAP, GROUP_TITLE_PX } from '../layout.js'
 import { sortCols, zoomAt, fitView } from '../interaction.js';
 import { THEMES, themeName, groupDotColor, boardTheme, paperFor } from '../theme.js';
 import { captionFor, cardLabel, cardMemo, FOOT } from '../drawplan.js';
+import { normCrop, cropSourceRect } from '../crop.js';
 
 const BADGE = { youtube: '▶', video: '🎞', pinterest: '📌', text: '✎', link: '🔗' };
 const LINK_KINDS = new Set(['youtube', 'pinterest', 'link']);
@@ -111,6 +112,26 @@ function start() {
   const videos = readBlocks('data-video');
   const videoUrls = new Map();
   const thumbUrl = (id) => (thumbs.has(id) ? `data:image/jpeg;base64,${thumbs.get(id).b64}` : null);
+  // 자른 사진: 썸네일에서 crop 사각형만 캔버스에 옮겨 그 그림을 쓴다(사진 칸에는 지금처럼 cover로 들어간다).
+  const croppedUrls = new Map();
+  const photoUrl = (c) => croppedUrls.get(c.id) ?? (normCrop(c.crop) ? null : thumbUrl(c.id));
+  function cropInto(c, img) {
+    const src = thumbUrl(c.id);
+    const crop = normCrop(c.crop);
+    if (!src || !crop) return;
+    const im = new Image();
+    im.onload = () => {
+      const { sx, sy, sw, sh } = cropSourceRect(crop, im.naturalWidth, im.naturalHeight);
+      const cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round(sw));
+      cv.height = Math.max(1, Math.round(sh));
+      cv.getContext('2d').drawImage(im, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+      const url = cv.toDataURL('image/jpeg', 0.92);
+      croppedUrls.set(c.id, url);
+      img.src = url;
+    };
+    im.src = src;
+  }
   const videoUrl = (id) => {
     if (!videos.has(id)) return null;
     if (!videoUrls.has(id)) videoUrls.set(id, b64ToBlobUrl(videos.get(id).b64, videos.get(id).mime));
@@ -192,8 +213,10 @@ function start() {
     const n = el('div', { class: `card ${type}${type === 'photo' && footed ? ' footed' : ''}`, 'data-id': c.id, title: label || c.title || '' });
     const memoEl = memo ? el('div', { class: 'memo', text: memo }) : null;
     if (type === 'photo') {
-      n.append(el('div', { class: 'pic' }, el('img', { src, alt: label || c.title || '', draggable: 'false' }),
-        c.note ? el('div', { class: 'note', text: c.note }) : null));
+      // 자른 사진은 잘라 낸 그림이 준비되면 src를 넣는다(전체 그림이 잠깐 보이지 않게).
+      const img = el('img', { ...(normCrop(c.crop) ? {} : { src }), alt: label || c.title || '', draggable: 'false' });
+      cropInto(c, img);
+      n.append(el('div', { class: 'pic' }, img, c.note ? el('div', { class: 'note', text: c.note }) : null));
       // 종류 이름만 있는 아랫단은 다크에서 숨긴다(footText).
       if (footed) {
         n.append(el('div', { class: `foot${label || memo ? '' : ' kindonly'}` },
@@ -335,7 +358,7 @@ function start() {
     if (!c) return;
     const box = el('div', { class: 'box' });
     const vsrc = c.kind === 'video' && c.video ? videoUrl(c.id) : null;
-    const isrc = c.hasThumb ? thumbUrl(c.id) : null;
+    const isrc = c.hasThumb ? photoUrl(c) : null;
     if (vsrc) box.append(el('video', { src: vsrc, controls: '', autoplay: '', playsinline: '' }));
     else if (c.kind === 'text') {
       const txt = el('div', { class: 'txt', text: c.text ?? '' });

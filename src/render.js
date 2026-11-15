@@ -9,11 +9,16 @@
 // - attach(surface|null): client.surfaces.on이 준 표면. visible이 false이면 그리기 루프를 멈춘다.
 // - setTargets(Map<cardId, rect>, animate): 카드의 목표 자리. animate이면 지금 자리에서 300ms ease-out으로 옮긴다.
 // - invalidateThumbs(): 썸네일 shard가 바뀌었을 때. 다음 그리기에서 base64 길이를 다시 보고 다르면 새로 디코드한다.
+// - 사진은 card.crop(crop.js)의 원본 사각형만 사진 칸에 cover로 그린다.
+// - scene().crop = {id, base, rect}이면 자르기 화면을 그린다: 원본 전체(base가 사진 칸에 맞는 자리), 바깥 어둡게,
+//   accent 색 틀과 손잡이 8개, 안내 글. cropLayout()은 마지막으로 그린 {img, card} 화면 rect(없으면 null).
+// - thumbSize(cardId) -> {width, height} | null: 디코드한 썸네일 크기.
 //
 // 모든 사각형은 각지게 그린다(둥근 모서리 없음).
 
 import { toScreen } from './layout.js';
 import { THEMES, groupDotColor, boardTheme, paperFor } from './theme.js';
+import { cropSourceRect, cropImageRect, CROP_HINT } from './crop.js';
 import { drawList, cardChrome, groupBox, groupLabel, groupMembers, groupToggle, cardLabel, cardMemo, wrapLines } from './drawplan.js';
 
 const ANIM_MS = 300;
@@ -94,6 +99,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
   // 배율 1 글꼴의 글 폭. 아랫단 줄 나누기가 프레임마다 재므로 모아 둔다.
   const widths = new Map();
   let mctx = null;
+  let cropLayout = null;
   const measure = (text, font) => {
     const key = font + '\n' + text;
     let w = widths.get(key);
@@ -249,10 +255,11 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
 
   // --- 카드 ---
 
-  function drawCover(ctx, bmp, s) {
-    const k = Math.max(s.w / bmp.width, s.h / bmp.height);
-    const w = bmp.width * k, h = bmp.height * k;
-    ctx.drawImage(bmp, s.x + (s.w - w) / 2, s.y + (s.h - h) / 2, w, h);
+  function drawCover(ctx, bmp, s, crop) {
+    const { sx, sy, sw, sh } = cropSourceRect(crop, bmp.width, bmp.height);
+    const k = Math.max(s.w / sw, s.h / sh);
+    const w = sw * k, h = sh * k;
+    ctx.drawImage(bmp, sx, sy, sw, sh, s.x + (s.w - w) / 2, s.y + (s.h - h) / 2, w, h);
   }
 
   function drawText(ctx, th, card, s) {
@@ -386,7 +393,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
       ctx.fillStyle = th.loadingBg;
       ctx.fillRect(inner.x, inner.y, inner.w, inner.h);
       const bmp = bitmapFor(card);
-      if (bmp) drawCover(ctx, bmp, inner);
+      if (bmp) drawCover(ctx, bmp, inner, card.crop);
     } else if (card.kind === 'text') drawText(ctx, th, card, inner);
     else if (card.kind === 'link' || card.kind === 'youtube' || card.kind === 'pinterest') drawLink(ctx, th, card, inner);
     else drawPlaceholder(ctx, th, card, inner);
@@ -414,6 +421,53 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
       ctx.fill();
     }
     ctx.restore();
+  }
+
+  // --- 자르기 ---
+
+  // 원본 전체를 그리고, 자를 사각형 바깥을 어둡게, 틀과 손잡이 8개를 긋는다.
+  function drawCrop(ctx, th, card, s, scale, crop, w, h) {
+    const bmp = bitmapFor(card);
+    if (!bmp) return null;
+    const inner = cardChrome(th, card, s, scale, measure).inner;
+    const img = cropImageRect(inner, crop.base, bmp.width, bmp.height);
+    const r = crop.rect;
+    const box = { x: img.x + r.x * img.w, y: img.y + r.y * img.h, w: r.w * img.w, h: r.h * img.h };
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(bmp, img.x, img.y, img.w, img.h);
+    ctx.beginPath();
+    ctx.rect(img.x, img.y, img.w, img.h);
+    ctx.rect(box.x, box.y, box.w, box.h);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fill('evenodd');
+    const accent = th.accent ?? th.selectLine;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(box.x, box.y, box.w, box.h);
+    const hs = 8;
+    const xs = [box.x, box.x + box.w / 2, box.x + box.w];
+    const ys = [box.y, box.y + box.h / 2, box.y + box.h];
+    ctx.fillStyle = '#ffffff';
+    for (let j = 0; j < 3; j++) {
+      for (let i = 0; i < 3; i++) {
+        if (i === 1 && j === 1) continue;
+        ctx.fillRect(xs[i] - hs / 2, ys[j] - hs / 2, hs, hs);
+        ctx.strokeRect(xs[i] - hs / 2 + 0.5, ys[j] - hs / 2 + 0.5, hs - 1, hs - 1);
+      }
+    }
+    // 안내 글
+    ctx.font = th.uiFont ?? GROUP_TOGGLE_FONT;
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(CROP_HINT).width + 20;
+    const hx = (w - tw) / 2, hy = 12;
+    ctx.fillStyle = th.badgeBg ?? 'rgba(0,0,0,.7)';
+    ctx.fillRect(hx, hy, tw, 24);
+    ctx.fillStyle = th.badgeInk ?? '#ffffff';
+    ctx.fillText(CROP_HINT, hx + 10, hy + 12);
+    ctx.restore();
+    return { img, card: s };
   }
 
   // --- 한 장 ---
@@ -478,6 +532,7 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
         if (offscreen(s)) continue;
         drawCard(ctx, th, card, s, view.scale);
       } else if (item.kind === 'selection') {
+        if (sc.crop && item.target === 'card' && item.id === sc.crop.id) continue;
         if (item.target === 'card') {
           const card = cardsById.get(item.id);
           const r = card && cardRect(card);
@@ -489,6 +544,11 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
         }
       }
     }
+    cropLayout = null;
+    const crop = sc.crop;
+    const ccard = crop && cardsById.get(crop.id);
+    const cr = ccard && cardRect(ccard);
+    if (cr) cropLayout = drawCrop(ctx, th, ccard, toScreen(view, cr), view.scale, crop, cssWidth, cssHeight);
   }
 
   return {
@@ -529,5 +589,10 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light }) 
       schedule();
     },
     get surface() { return surface; },
+    cropLayout: () => cropLayout,
+    thumbSize(id) {
+      const bmp = bitmaps.get(id)?.bmp;
+      return bmp ? { width: bmp.width, height: bmp.height } : null;
+    },
   };
 }
