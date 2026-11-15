@@ -6,12 +6,15 @@
 
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
-import { BOARDS_ENTRY, mergeBoards, saveWithRetry, shardIdOf, createThumbStore } from './store.js';
+import { BOARDS_ENTRY, shardIdOf, createThumbStore } from './store.js';
+import { createDocEditor } from './patches.js';
 import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
 import { placeNear } from './interaction.js';
 import { THEMES, themeName } from './theme.js';
-import { normSelected, resolveSelected, deleteCard, deleteGroup, viewCenter } from './selection.js';
+import {
+  normSelected, resolveSelected, deleteCardPatches, deleteGroupPatches, staleTombstones, viewCenter,
+} from './selection.js';
 import { createGate, retryRead, createSaver } from './startup.js';
 import { panelOutputs } from './panel.js';
 import { createPreview } from './preview.js';
@@ -32,7 +35,8 @@ const HEX = /^#[0-9a-f]{6}$/i;
 
 const p = createPlatform(window.kaleidoscope);
 
-let doc = { version: 1, boards: [] };
+// 보드 문서. 편집은 패치로 쌓아 저장한다(patches.js). ed.doc은 저장 값 위에 아직 안 쓴 패치를 얹은 화면용 문서다.
+const ed = createDocEditor({ adapter: p.storage });
 let boardId = null;
 let mode = 'manual';
 let selectedId = null; // 창 상태 selected에서 온다(sandbox가 쓴다)
@@ -46,7 +50,7 @@ const ready = createGate(); // boards와 썸네일 저장소가 준비되면 열
 
 // --- 보드와 카드 ---
 
-const liveBoards = () => doc.boards.filter((b) => !b.deleted);
+const liveBoards = () => ed.doc.boards.filter((b) => !b.deleted);
 const board = () => liveBoards().find((b) => b.id === boardId) ?? null;
 const liveCards = () => (board()?.cards ?? []).filter((c) => !c.deleted);
 const cardById = (id) => (id ? liveCards().find((c) => c.id === id) ?? null : null);
@@ -59,7 +63,7 @@ function ensureBoard() {
   // 저장된 보드를 읽기 전에는 기본 보드를 만들지 않는다.
   if (!boardId && loaded) {
     const b = newBoard(DEFAULT_BOARD);
-    doc.boards.push(b);
+    ed.edit({ kind: 'board', id: b.id, insert: b, t: b.updatedAt });
     boardId = b.id;
     scheduleSave();
   }
@@ -70,29 +74,39 @@ function ensureBoard() {
   }
 }
 
-function touchCard(id, patch, t = Date.now()) {
-  const c = cardById(id);
-  if (!c) return null;
-  Object.assign(c, patch, { updatedAt: t });
-  return c;
+// 지금 보드의 카드나 묶음 하나를 고치는 패치. 고친 필드만 저장에 실린다.
+function touchCard(id, fields, deleteKeys) {
+  if (!cardById(id)) return false;
+  ed.edit({ kind: 'card', boardId, id, fields, deleteKeys });
+  return true;
 }
 
-function touchGroup(id, patch, t = Date.now()) {
-  const g = groupById(id);
-  if (!g) return null;
-  Object.assign(g, patch, { updatedAt: t });
-  return g;
+function touchGroup(id, fields) {
+  if (!groupById(id)) return false;
+  ed.edit({ kind: 'group', boardId, id, fields });
+  return true;
+}
+
+function touchBoard(fields, deleteKeys) {
+  if (!board()) return false;
+  ed.edit({ kind: 'board', id: boardId, fields, deleteKeys });
+  return true;
 }
 
 // --- 저장 ---
 
 // 저장은 한 줄로 세운다. 창을 닫을 때 saver.flush()가 남은 저장을 끝낸다.
+// 저장은 새로 읽은 값에 쌓인 패치를 적용해 쓴다. 다른 프레임(sandbox)이 고친 필드를 덮지 않는다.
 const saver = createSaver(async () => {
-  const next = await saveWithRetry(p.storage, (d) => d, { local: doc });
-  // 저장하는 동안 바뀐 로컬 내용이 이기도록 로컬을 앞에 둔다.
-  doc = mergeBoards(doc, next);
+  await ed.save();
   refresh();
-}, { onError: (err) => setNotice(err?.message ?? '저장하지 못했어요') });
+}, {
+  // 패치는 쓰기가 성공할 때까지 줄에 남는다. 실패하면 조금 뒤 다시 저장한다.
+  onError: (err) => {
+    setNotice(err?.message ?? '저장하지 못했어요');
+    if (ed.pending) saver.schedule(3000);
+  },
+});
 
 const scheduleSave = (ms = 0) => saver.schedule(ms);
 
@@ -242,24 +256,20 @@ function setTheme(name) {
 }
 darkQuery?.addEventListener?.('change', (e) => setTheme(themeName(!!e.matches)));
 
-// 다른 쪽(sandbox나 다른 PC)이 지운 카드의 썸네일과 원본을 걷어낸다. 처음 읽은 묘비는 건드리지 않는다.
-const knownDeleted = new Set();
-let sweptOnce = false;
-function sweepDeleted() {
-  if (!loaded) return;
-  for (const b of doc.boards) {
-    for (const c of b.cards ?? []) {
-      if (!c.deleted || knownDeleted.has(c.id)) continue;
-      knownDeleted.add(c.id);
-      if (sweptOnce) cleanupCard(c);
-    }
+// 지운 카드의 썸네일과 원본은 묘비가 된 지 7일이 지나고 여전히 묘비일 때만 걷어낸다.
+// 묘비는 병합에서 뒤집힐 수 있다(다른 PC나 sandbox의 더 늦은 편집). 7일 안에 되살려도 잃는 것이 없다.
+// 시작할 때와 그다음 한 시간마다 돈다. 썸네일 저장소가 준비된 뒤에만 돈다.
+const GC_EVERY_MS = 3600 * 1000;
+const collected = new Set(); // 이번 세션에 걷어낸 카드
+function collectGarbage() {
+  if (!loaded || !thumbs) return;
+  for (const c of staleTombstones(ed.doc, Date.now())) {
+    if (collected.has(c.id)) continue;
+    collected.add(c.id);
+    // 공간 정리는 실패해도 괜찮다.
+    if (c.hasThumb) thumbs.remove(c.id).catch(() => {});
+    if (c.origKey) p.blobs.remove(c.origKey).catch(() => {});
   }
-  sweptOnce = true;
-}
-function cleanupCard(c) {
-  // 공간 정리는 실패해도 카드 삭제에는 영향이 없다.
-  if (c.hasThumb && thumbs) thumbs.remove(c.id).catch(() => {});
-  if (c.origKey) p.blobs.remove(c.origKey).catch(() => {});
 }
 
 // 고른 것이 지워졌거나 다른 보드의 것이면 참. 아직 모르는 id(다른 PC에서 막 온 카드)는 남긴다.
@@ -267,13 +277,12 @@ function selectionGone() {
   const sel = selectedId ? { kind: 'card', id: selectedId } : { kind: 'group', id: selectedGroupId };
   if (resolveSelected(sel, board())) return false;
   const key = sel.kind === 'card' ? 'cards' : 'groups';
-  return doc.boards.some((b) => (b[key] ?? []).some((x) => x.id === sel.id));
+  return ed.doc.boards.some((b) => (b[key] ?? []).some((x) => x.id === sel.id));
 }
 
 // 문서가 바뀐 뒤 출력을 다시 맞춘다. 고른 것이 사라졌으면 선택을 푼다.
 function refresh() {
   ensureBoard();
-  sweepDeleted();
   if (loaded && (selectedId || selectedGroupId) && selectionGone()) select();
   publishBoards();
 }
@@ -299,7 +308,7 @@ function ingestDeps() {
 function addCards(cards, full) {
   const b = board();
   if (b && cards.length) {
-    b.cards.push(...cards);
+    ed.edit(cards.map((c) => ({ kind: 'card', boardId: b.id, id: c.id, insert: c, t: c.updatedAt })));
     refresh();
     scheduleSave();
   }
@@ -368,8 +377,7 @@ p.handle('group_add', () => {
   const c = center();
   const { w, h } = GROUP_DEFAULT_SIZE;
   const g = newGroup({ rect: { x: c.x - w / 2, y: c.y - h / 2, w, h } });
-  if (!Array.isArray(b.groups)) b.groups = [];
-  b.groups.push(g);
+  ed.edit({ kind: 'group', boardId: b.id, id: g.id, insert: g, t: g.updatedAt });
   refresh();
   select({ groupId: g.id });
   scheduleSave();
@@ -392,22 +400,24 @@ p.handle('group_rename', ({ event } = {}) => {
 
 p.handle('group_delete', () => {
   // 묶음은 묘비로 남기고, 안의 카드는 groupId를 지운다. 카드 자체는 남는다.
-  if (!deleteGroup(board(), selectedGroupId)) return;
+  const patches = deleteGroupPatches(board(), selectedGroupId);
+  if (!patches.length) return;
+  ed.edit(patches);
   select();
   refresh();
   scheduleSave();
   clearNotice();
 });
 
-p.handle('delete_selected', async () => {
-  const c = deleteCard(board(), selectedId);
-  if (!c) return;
-  knownDeleted.add(c.id);
+// 썸네일과 원본은 바로 지우지 않는다(collectGarbage가 7일 뒤 걷는다).
+p.handle('delete_selected', () => {
+  const patches = deleteCardPatches(board(), selectedId);
+  if (!patches.length) return;
+  ed.edit(patches);
   select();
   refresh();
   scheduleSave();
   clearNotice();
-  cleanupCard(c);
 });
 
 p.handle('set_text_color', ({ event } = {}) => {
@@ -423,11 +433,7 @@ p.handle('set_text_color', ({ event } = {}) => {
 // 보드 배경과 글 카드 종이. color 블록은 끄는 동안 값을 여러 번 보내므로 저장은 조금 모아서 한다.
 // 기본값으로 돌릴 때는 키를 지운다(저장 스키마는 문자열만 받아 null을 쓰지 않는다).
 function setBoardBg(value) {
-  const b = board();
-  if (!b) return;
-  if (value === null) delete b.bg;
-  else b.bg = value;
-  b.updatedAt = Date.now();
+  if (!(value === null ? touchBoard(undefined, ['bg']) : touchBoard({ bg: value }))) return;
   publishBoards();
   scheduleSave(DRAG_SAVE_MS);
   clearNotice();
@@ -445,9 +451,8 @@ p.handle('reset_board_bg', () => {
 function setTextPaper(value) {
   const c = cardById(selectedId);
   if (!c || c.kind !== 'text') return;
-  if (value === null) delete c.paper;
-  else c.paper = value;
-  c.updatedAt = Date.now();
+  if (value === null) touchCard(c.id, undefined, ['paper']);
+  else touchCard(c.id, { paper: value });
   refresh();
   scheduleSave(DRAG_SAVE_MS);
   publishSelected();
@@ -501,7 +506,7 @@ p.handle('board_select', ({ event } = {}) => {
 
 p.handle('board_new', () => {
   const b = newBoard(`보드 ${liveBoards().length + 1}`);
-  doc.boards.push(b);
+  ed.edit({ kind: 'board', id: b.id, insert: b, t: b.updatedAt });
   boardId = b.id;
   select();
   refresh();
@@ -512,9 +517,7 @@ p.handle('board_new', () => {
 p.handle('board_rename', ({ event } = {}) => {
   const raw = typeof event === 'string' ? event : p.getState('board_name');
   const name = typeof raw === 'string' ? raw.trim() : '';
-  const b = board();
-  if (!b || !name) return;
-  Object.assign(b, { name, updatedAt: Date.now() });
+  if (!name || !touchBoard({ name })) return;
   p.setState('board_name', '');
   p.setState('rename_open', false); // 동작 목록에 client를 섞을 수 없어 대화상자는 여기서 닫는다
   publishBoards();
@@ -612,17 +615,19 @@ p.onState((state) => {
 // 디바운스 중인 저장과 읽기 단계에 있는 저장을 여기서 끝낸다.
 p.onLifecycle((lifecycle) => (lifecycle?.phase === 'closing' ? saver.flush() : undefined));
 
+// 시작 읽기. 그보다 먼저 온 변경(watch)이 있으면 그 값이 더 새로우므로 읽은 값은 버린다.
 function finishBoardsLoad(value) {
-  doc = mergeBoards(doc, value);
   if (loaded) return;
+  ed.receive(value);
   loaded = true;
   refresh();
+  collectGarbage();
 }
 
 // 다른 PC의 변경. 시작하는 동안 온 값도 받으려고 읽기 전에 건다.
 p.storage.watch(BOARDS_ENTRY, (value) => {
   if (!loaded) { finishBoardsLoad(value); updateLoading(); return; }
-  doc = mergeBoards(doc, value);
+  ed.receive(value);
   refresh();
   if (selectedId || selectedGroupId) publishSelected();
 }, () => { /* 시작 읽기의 재시도가 알린다 */ });
@@ -670,6 +675,8 @@ async function start() {
   thumbs = await createThumbStore(p.storage, { shards: SHARDS });
   for (const [id, value] of pendingShards) thumbs.reload(id, value);
   pendingShards.clear();
+  collectGarbage();
+  setInterval(collectGarbage, GC_EVERY_MS);
   const missing = thumbs.missing();
   if (missing.length) onReadFail();
   updateLoading();

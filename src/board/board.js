@@ -5,33 +5,32 @@
 // - 창 상태
 //   읽기: board(지금 보드 id, client가 씀), mode('manual'|'sorted'), cmd({op, n}, n이 바뀔 때만 실행), selected
 //   쓰기: selected {kind, id}|null, view {cx, cy, scale}(200ms 모음), paste_inbox {text, n}
+// - 보드 편집은 패치로 쌓아(patches.js) 새로 읽은 값에 적용해 쓴다. 손을 뗄 때와 키로 지울 때 바로 저장하고,
+//   창을 닫거나 숨길 때(pagehide, visibilitychange) 남은 패치를 바로 쓴다.
 // - 입력: 포인터(interaction.js), wheel(이동), ctrl+wheel과 gesture*(확대), Delete/Backspace, Esc, 붙여넣기.
 
 import { reduce, initialState, zoomAt, fitView, sortCols } from '../interaction.js';
 import { sortedLayout, SORT_CELL, SORT_GAP } from '../layout.js';
 import { createRenderer } from '../render.js';
 import { THEMES, themeName, boardTheme } from '../theme.js';
-import { BOARDS_ENTRY, mergeBoards, saveWithRetry, shardIdOf, createThumbStore } from '../store.js';
+import { BOARDS_ENTRY, shardIdOf, createThumbStore, isConflict } from '../store.js';
+import { createDocEditor } from '../patches.js';
 import { createSaver, retryRead } from '../startup.js';
 import { liveGroups } from '../model.js';
-import { normSelected, deleteCard, deleteGroup } from '../selection.js';
+import { normSelected, deleteCardPatches, deleteGroupPatches } from '../selection.js';
 import { wheelView, gestureView, stateFromView, viewFromState, createCmdTracker, keyEffect } from './input.js';
 
 const SHARDS = 128;
-const DRAG_SAVE_MS = 400;
+const SAVE_RETRY_MS = 3000;
+const CLOSE_TRIES = 3;
 const VIEW_MS = 200;
 const ZOOM_STEP = 1.25;
 const TOAST_MS = 2400;
 
 const k = window.kaleidoscope;
 
-let lastRemote = null; // 마지막으로 읽은 boards 값. 창을 닫을 때 바로 쓰기에 쓴다
 const storage = {
-  get: async (entry) => {
-    const v = await k.getStorage(entry);
-    if (entry === BOARDS_ENTRY) lastRemote = v;
-    return v;
-  },
+  get: (entry) => k.getStorage(entry),
   set: (entry, value) => k.setStorage(entry, value),
 };
 
@@ -40,13 +39,21 @@ const storage = {
 document.documentElement.style.cssText = 'margin:0;height:100%;overflow:hidden';
 document.body.style.cssText = 'margin:0;height:100%;overflow:hidden;position:relative';
 const canvas = document.createElement('canvas');
-canvas.tabIndex = 0;
 canvas.setAttribute('aria-label', '무드보드');
 canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none';
 const toast = document.createElement('div');
 toast.style.cssText = 'position:absolute;left:50%;bottom:16px;transform:translateX(-50%);padding:6px 12px;'
   + 'font:13px system-ui,-apple-system,sans-serif;border-radius:6px;pointer-events:none;opacity:0;transition:opacity .2s';
-document.body.append(canvas, toast);
+// ⌘V 받이. WebKit은 편집할 수 없는 요소에 초점이 있으면 붙여넣기를 막고 paste를 보내지 않는다.
+// 보드를 누르면 이 보이지 않는 textarea에 초점을 준다. 키(Delete, Backspace, Esc)도 여기서 받는다.
+const pasteBox = document.createElement('textarea');
+pasteBox.setAttribute('aria-hidden', 'true');
+pasteBox.tabIndex = -1;
+pasteBox.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;padding:0;border:0;'
+  + 'margin:0;resize:none;overflow:hidden;pointer-events:none;font-size:16px';
+pasteBox.addEventListener('input', () => { pasteBox.value = ''; });
+const focusPasteBox = () => { if (document.activeElement !== pasteBox) pasteBox.focus({ preventScroll: true }); };
+document.body.append(canvas, toast, pasteBox);
 
 const resizeTarget = new EventTarget();
 const surface = {
@@ -61,7 +68,9 @@ const size = () => ({ w: surface.cssWidth, h: surface.cssHeight });
 
 // --- 상태 ---
 
-let doc = { version: 1, boards: [] };
+// ed.doc: 마지막으로 받은 boards 위에 아직 안 쓴 패치를 얹은 화면용 문서.
+const ed = createDocEditor({ adapter: storage });
+let viewBoard = null; // 지금 view가 보고 있는 보드 id
 let boardId = null;
 let ui = initialState();
 let selected = normSelected(k.getState('selected'));
@@ -71,7 +80,7 @@ let viewRestored = false;
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 let themeKey = themeName(darkQuery.matches);
 
-const liveBoards = () => doc.boards.filter((b) => !b.deleted);
+const liveBoards = () => ed.doc.boards.filter((b) => !b.deleted);
 const board = () => liveBoards().find((b) => b.id === boardId) ?? liveBoards()[0] ?? null;
 const liveCards = () => (board()?.cards ?? []).filter((c) => !c.deleted);
 const cardById = (id) => (id ? liveCards().find((c) => c.id === id) ?? null : null);
@@ -111,6 +120,12 @@ function targets() {
 }
 
 function refresh(animate) {
+  // 다른 보드로 바뀌면(새 보드가 저장소에 늦게 와도) 원점·배율 1에서 본다.
+  const id = board()?.id ?? null;
+  if (id !== viewBoard) {
+    if (viewBoard !== null && id !== null && viewRestored) setView({ x: 0, y: 0, scale: 1 });
+    if (id !== null) viewBoard = id;
+  }
   const cards = liveCards();
   const sorted = sortedLayout(cards, { cols: sortCols(cards.length), cell: SORT_CELL, gap: SORT_GAP });
   ui = { ...ui, cards, groups: liveGroups(board()), sorted };
@@ -125,47 +140,51 @@ function syncUi() {
 
 // --- 저장 ---
 
-let unsaved = false;
+// 패치는 쓰기가 성공할 때까지 줄에 남는다(ed.pending). 실패하면 조금 뒤 다시 저장한다.
 const saver = createSaver(async () => {
-  unsaved = false;
-  const next = await saveWithRetry(storage, (d) => d, { local: doc });
-  doc = mergeBoards(doc, next);
+  await ed.save();
   refresh(false);
 }, {
-  onError: (err) => { unsaved = true; showToast(err?.message ?? '저장하지 못했어요'); },
+  onError: (err) => {
+    showToast(err?.message ?? '저장하지 못했어요');
+    if (ed.pending) saver.schedule(SAVE_RETRY_MS);
+  },
 });
-function scheduleSave(ms = 0) {
-  unsaved = true;
-  saver.schedule(ms);
-}
+const save = () => saver.schedule(0);
 
-// 창을 닫을 때 브리지는 pagehide를 보낸 직후 이미 보낸 setStorage만 기다린다.
-// 읽기 단계에 있는 저장은 기다리지 않으므로 남은 변경을 마지막으로 읽은 값과 합쳐 바로 쓴다.
-window.addEventListener('pagehide', () => {
-  if (!unsaved) return;
-  unsaved = false;
-  k.setStorage(BOARDS_ENTRY, mergeBoards(doc, lastRemote)).catch(() => {});
-});
-k.onLifecycle?.((l) => (l?.phase === 'closing' ? saver.flush() : undefined));
+// 창을 닫거나 숨길 때. 브리지의 닫기 flush는 pagehide를 보낸 직후 이미 보낸 setStorage만 기다리므로,
+// 첫 시도는 읽기 없이 마지막으로 받은 값에 패치를 얹어 바로 보낸다. 충돌하면 다시 읽고 얹어 CLOSE_TRIES번까지.
+// (closing lifecycle은 client 프레임에만 온다. sandbox.tsx는 ks-client-lifecycle을 보내지 않는다.)
+let closing = null;
+function flushNow() {
+  if (!ed.pending || closing) return closing;
+  closing = (async () => {
+    for (let i = 0; i < CLOSE_TRIES && ed.pending; i++) {
+      try {
+        if (i === 0) await ed.writeNow();
+        else { ed.receive(await storage.get(BOARDS_ENTRY)); await ed.writeNow(); }
+      } catch (err) {
+        if (!isConflict(err)) break;
+      }
+    }
+  })().finally(() => { closing = null; });
+  return closing;
+}
+window.addEventListener('pagehide', flushNow);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushNow(); });
 
-function touchCard(id, patch, t = Date.now()) {
-  const c = cardById(id);
-  if (!c) return null;
-  Object.assign(c, patch, { updatedAt: t });
-  return c;
+// 지금 보드의 카드나 묶음 하나를 고치는 패치. 고친 필드만 저장에 실린다.
+function touchCard(id, fields, deleteKeys) {
+  if (!cardById(id)) return;
+  ed.edit({ kind: 'card', boardId: board().id, id, fields, deleteKeys });
 }
-function setCardGroup(id, groupId, t = Date.now()) {
-  const c = cardById(id);
-  if (!c) return;
-  if (typeof groupId === 'string' && groupId) c.groupId = groupId;
-  else delete c.groupId;
-  c.updatedAt = t;
+function setCardGroup(id, groupId) {
+  if (typeof groupId === 'string' && groupId) touchCard(id, { groupId });
+  else touchCard(id, undefined, ['groupId']);
 }
-function touchGroup(id, patch, t = Date.now()) {
-  const g = groupById(id);
-  if (!g) return null;
-  Object.assign(g, patch, { updatedAt: t });
-  return g;
+function touchGroup(id, fields) {
+  if (!groupById(id)) return;
+  ed.edit({ kind: 'group', boardId: board().id, id, fields });
 }
 
 // --- 선택과 view 내보내기 ---
@@ -219,27 +238,26 @@ function onPointer(event) {
     } else if (e.type === 'moved') {
       touchCard(e.cardId, { manual: { ...e.rect } });
       syncUi();
-      scheduleSave(DRAG_SAVE_MS);
+      save();
     } else if (e.type === 'membership') {
       setCardGroup(e.cardId, e.groupId);
       syncUi();
-      scheduleSave(DRAG_SAVE_MS);
+      save();
     } else if (e.type === 'group_moved') {
-      const t = Date.now();
-      touchGroup(e.groupId, { rect: { ...e.rect } }, t);
-      for (const m of e.cards ?? []) touchCard(m.cardId, { manual: { ...m.rect } }, t);
+      touchGroup(e.groupId, { rect: { ...e.rect } });
+      for (const m of e.cards ?? []) touchCard(m.cardId, { manual: { ...m.rect } });
       syncUi();
-      scheduleSave(0);
+      save();
     } else if (e.type === 'group_resized') {
       touchGroup(e.groupId, { rect: { ...e.rect } });
       syncUi();
-      scheduleSave(DRAG_SAVE_MS);
+      save();
     } else if (e.type === 'group_toggled') {
       const g = groupById(e.groupId);
       if (g) touchGroup(g.id, { collapsed: !g.collapsed });
       if (g?.collapsed && cardById(selCard())?.groupId === g.id) select(null);
       syncUi();
-      scheduleSave(DRAG_SAVE_MS);
+      save();
     } else if (e.type === 'notice') {
       showToast(e.text);
     }
@@ -249,12 +267,16 @@ function onPointer(event) {
 
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
-  canvas.focus({ preventScroll: true });
+  focusPasteBox();
   try { canvas.setPointerCapture(e.pointerId); } catch { /* 이미 놓친 포인터 */ }
   onPointer(pointerEvent('down', e));
 });
 canvas.addEventListener('pointermove', (e) => { if (ui.drag) onPointer(pointerEvent('move', e)); });
-canvas.addEventListener('pointerup', (e) => { if (ui.drag) onPointer(pointerEvent('up', e)); });
+// mousedown의 기본 동작이 초점을 옮길 수 있으므로 손을 뗄 때 한 번 더 준다.
+canvas.addEventListener('pointerup', (e) => {
+  focusPasteBox();
+  if (ui.drag) onPointer(pointerEvent('up', e));
+});
 canvas.addEventListener('pointercancel', (e) => { if (ui.drag) onPointer(pointerEvent('cancel', e)); });
 
 // --- wheel과 집기 ---
@@ -293,17 +315,20 @@ for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
 function deleteSelected() {
   const b = board();
   if (!b || !selected) return;
-  const t = Date.now();
-  const done = selected.kind === 'card' ? deleteCard(b, selected.id, t) : deleteGroup(b, selected.id, t);
+  const patches = selected.kind === 'card' ? deleteCardPatches(b, selected.id) : deleteGroupPatches(b, selected.id);
   select(null);
-  if (!done) return;
+  if (!patches.length) return;
+  ed.edit(patches);
   refresh(false);
-  scheduleSave(0);
+  save();
 }
 
 window.addEventListener('keydown', (e) => {
   const t = e.target;
-  const editing = t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  // 붙여넣기 받이는 비어 있는 동안 편집 중이 아니다(지우기와 Esc를 보드가 받는다).
+  const editing = t === pasteBox
+    ? pasteBox.value !== ''
+    : t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
   const fx = keyEffect({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, editing });
   if (!fx) return;
   e.preventDefault();
@@ -316,8 +341,9 @@ window.addEventListener('keydown', (e) => {
 
 document.addEventListener('paste', (e) => {
   const text = e.clipboardData?.getData('text/plain') || e.clipboardData?.getData('text') || '';
-  if (!text.trim()) return;
   e.preventDefault();
+  pasteBox.value = '';
+  if (!text.trim()) return;
   k.setState('paste_inbox', { text, n: Date.now() });
 });
 
@@ -342,10 +368,8 @@ function applyMode(mode) {
 function applyBoard(id) {
   const next = typeof id === 'string' ? id : null;
   if (next === boardId) return;
-  const prev = board()?.id ?? null;
   boardId = next;
   ui = { ...ui, drag: null };
-  if (viewRestored && prev !== null && board()?.id !== prev) setView({ x: 0, y: 0, scale: 1 });
   refresh(false);
 }
 
@@ -368,8 +392,7 @@ darkQuery.addEventListener('change', (e) => {
 // --- 저장소 ---
 
 k.onStorageChange(BOARDS_ENTRY, (value) => {
-  lastRemote = value;
-  doc = mergeBoards(doc, value);
+  ed.receive(value);
   loaded = true;
   refresh(false);
 }, () => { /* 시작 읽기의 재시도가 맡는다 */ });
@@ -396,7 +419,7 @@ async function start() {
 
   const boardsLoad = retryRead(() => storage.get(BOARDS_ENTRY), { stop: () => loaded })
     .then((r) => {
-      if (!r.stopped) { doc = mergeBoards(doc, r.value); loaded = true; }
+      if (!r.stopped && !loaded) { ed.receive(r.value); loaded = true; }
       refresh(false);
     });
   thumbs = await createThumbStore(storage, { shards: SHARDS });

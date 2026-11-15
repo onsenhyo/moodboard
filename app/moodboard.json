@@ -72,15 +72,15 @@
   "assets": [
     {
       "id": "moodboard",
-      "version": 8
+      "version": 9
     },
     {
       "id": "moodboard-board",
-      "version": 1
+      "version": 2
     },
     {
       "id": "moodboard-export",
-      "version": 1
+      "version": 2
     }
   ],
   "storage": {
@@ -2068,7 +2068,7 @@
     "runtime": "javascript",
     "entry": {
       "id": "moodboard",
-      "version": 8
+      "version": 9
     },
     "outputs": {
       "selected": {

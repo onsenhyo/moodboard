@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normSelected, resolveSelected, deleteCard, deleteGroup, viewCenter, DEFAULT_CENTER } from '../src/selection.js';
+import {
+  normSelected, resolveSelected, deleteCardPatches, deleteGroupPatches, staleTombstones, viewCenter, DEFAULT_CENTER, GC_AGE_MS,
+} from '../src/selection.js';
+import { applyPatches } from '../src/patches.js';
 import { panelOutputs } from '../src/panel.js';
 
 const board = () => ({
@@ -49,30 +52,44 @@ test('selected → 옆 칸 입력: 묶음이면 group 칸, 카드면 카드 칸'
   assert.equal(panelOutputs(resolveSelected({ kind: 'card', id: 'd' }, b)).sel_none, true);
 });
 
-test('deleteCard: 묘비로 남기고 updatedAt을 올린다', () => {
+test('deleteCardPatches: 묘비 패치, 적용하면 deleted와 updatedAt', () => {
   const b = board();
-  const c = deleteCard(b, 'a', 50);
-  assert.equal(c.id, 'a');
-  assert.equal(b.cards[0].deleted, true);
-  assert.equal(b.cards[0].updatedAt, 50);
-  assert.equal(deleteCard(b, 'a', 60), null); // 이미 지운 것
-  assert.equal(deleteCard(b, 'zz', 60), null);
+  const ps = deleteCardPatches(b, 'a');
+  assert.deepEqual(ps, [{ kind: 'card', boardId: 'b', id: 'a', fields: { deleted: true } }]);
+  const d = applyPatches({ version: 1, boards: [b] }, ps.map((p) => ({ ...p, t: 50 })));
+  assert.equal(d.boards[0].cards[0].deleted, true);
+  assert.equal(d.boards[0].cards[0].updatedAt, 50);
+  assert.deepEqual(deleteCardPatches(b, 'd'), []); // 이미 지운 것
+  assert.deepEqual(deleteCardPatches(b, 'zz'), []);
 });
 
-test('deleteGroup: 묶음은 묘비, 안의 카드는 groupId 키만 지우고 남는다', () => {
+test('deleteGroupPatches: 묶음은 묘비, 안의 카드는 groupId 키만 지우고 남는다', () => {
   const b = board();
-  const g = deleteGroup(b, 'g', 70);
-  assert.equal(g.id, 'g');
-  assert.equal(b.groups[0].deleted, true);
-  assert.equal(b.groups[0].updatedAt, 70);
+  const ps = deleteGroupPatches(b, 'g');
+  const d = applyPatches({ version: 1, boards: [b] }, ps.map((p) => ({ ...p, t: 70 })));
+  const nb = d.boards[0];
+  assert.equal(nb.groups[0].deleted, true);
+  assert.equal(nb.groups[0].updatedAt, 70);
   for (const id of ['a', 'c']) {
-    const c = b.cards.find((x) => x.id === id);
+    const c = nb.cards.find((x) => x.id === id);
     assert.equal('groupId' in c, false);
     assert.equal(c.updatedAt, 70);
     assert.equal(c.deleted, undefined);
   }
-  assert.equal(b.cards.find((x) => x.id === 'e').groupId, 'h');
-  assert.equal(deleteGroup(b, 'g', 80), null);
+  assert.equal(nb.cards.find((x) => x.id === 'e').groupId, 'h');
+  assert.deepEqual(deleteGroupPatches(nb, 'g'), []);
+});
+
+test('staleTombstones: 지운 지 7일이 지난 묘비만, 되살린 카드는 아니다', () => {
+  const now = 100 * GC_AGE_MS;
+  const doc = { boards: [{ id: 'b', cards: [
+    { id: 'old', deleted: true, updatedAt: now - GC_AGE_MS },
+    { id: 'fresh', deleted: true, updatedAt: now - GC_AGE_MS + 1 },
+    { id: 'live', updatedAt: 0 },
+    { id: 'revived', deleted: false, updatedAt: 0 },
+  ] }, { id: 'b2' }] };
+  assert.deepEqual(staleTombstones(doc, now).map((c) => c.id), ['old']);
+  assert.deepEqual(staleTombstones(null, now), []);
 });
 
 test('viewCenter: view 상태의 가운데, 없거나 틀리면 기본 자리', () => {
