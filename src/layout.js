@@ -58,3 +58,42 @@ export function hitTest(cards, rectOf, worldPoint, scale = 1) {
   }
   return null;
 }
+
+// 묶음 상자. 제목줄은 rect 위쪽 28 화면 px, 그 왼쪽 24px는 접기 단추다.
+export const GROUP_TITLE_PX = 28;
+export const GROUP_TOGGLE_PX = 24;
+export const MIN_GROUP_W = 160;
+export const MIN_GROUP_H = 100;
+
+const liveGroups = (groups) => (groups ?? []).filter(g => g && !g.deleted);
+
+// 위(배열 끝)부터 검사한다. 접힌 묶음은 제목줄만 맞는다.
+export function hitTestGroup(groups, worldPoint, scale = 1) {
+  const { x, y } = worldPoint;
+  const title = GROUP_TITLE_PX / scale, toggle = GROUP_TOGGLE_PX / scale, zone = RESIZE_PX / scale;
+  const list = liveGroups(groups);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const group = list[i];
+    const r = group.rect;
+    const h = group.collapsed ? Math.min(r.h, title) : r.h;
+    if (x < r.x || y < r.y || x > r.x + r.w || y > r.y + h) continue;
+    const inTitle = y <= r.y + title;
+    if (inTitle && x <= r.x + toggle) return { group, zone: 'toggle' };
+    if (!group.collapsed && x >= r.x + r.w - zone && y >= r.y + r.h - zone) return { group, zone: 'resize' };
+    return { group, zone: inTitle ? 'title' : 'body' };
+  }
+  return null;
+}
+
+// 카드 중심이 들어가는 묶음 중 위(배열 끝) 것의 id. 접힌 묶음은 뺀다.
+export function memberOf(groups, rect) {
+  const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
+  const list = liveGroups(groups);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const g = list[i];
+    if (g.collapsed) continue;
+    const r = g.rect;
+    if (cx >= r.x && cy >= r.y && cx <= r.x + r.w && cy <= r.y + r.h) return g.id;
+  }
+  return null;
+}

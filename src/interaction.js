@@ -7,14 +7,22 @@
 //     mode: 'manual'|'sorted',
 //     view: {x, y, scale},           // 화면 = (월드 − view.xy) × scale
 //     size: {w, h},                  // 그려진 표면의 CSS px
-//     cards: Card[],                 // 지금 보드의 보이는 카드(그리는 순서)
+//     cards: Card[],                 // 지금 보드의 카드(그리는 순서). 접힌 묶음의 카드도 든다.
+//     groups: Group[],               // 묶음 상자(그리는 순서). deleted인 것은 없는 것으로 본다.
 //     sorted: Map<cardId, rect>|null,// 정렬 모드의 배치
 //     drag: null | {...},            // 진행 중인 끌기
 //   }
-// - effects: {type:'select', cardId|null} | {type:'moved', cardId, rect} | {type:'notice', text}
-//   moved는 손을 뗄 때(up) 한 번만 낸다. 끄는 동안의 자리는 state.drag.rect로 그린다.
+// - effects: {type:'select', cardId|null} | {type:'select', cardId:null, groupId}
+//          | {type:'moved', cardId, rect} | {type:'membership', cardId, groupId|null}
+//          | {type:'group_moved', groupId, rect, cards:[{cardId, rect}]}
+//          | {type:'group_resized', groupId, rect} | {type:'group_toggled', groupId}
+//          | {type:'notice', text}
+//   moved와 group_*는 손을 뗄 때(up) 한 번만 낸다. 끄는 동안의 자리는 state.drag.rect
+//   (묶음을 끌 때는 drag.cards도)로 그린다.
+//   membership은 카드 moved 바로 뒤에, 놓은 자리의 묶음이 카드의 groupId와 다를 때만 낸다.
+//   정렬 모드에서는 묶음을 숨기므로 묶음은 맞지 않는다.
 
-import { toWorld, hitTest } from './layout.js';
+import { toWorld, hitTest, hitTestGroup, memberOf, MIN_GROUP_W, MIN_GROUP_H } from './layout.js';
 
 export const SORT_NOTICE = '내 배치로 바꾸면 옮길 수 있어요';
 export const MIN_CARD = 48;
@@ -27,7 +35,7 @@ const NEW_H = 180;
 const JITTER_PX = 40;
 
 export function initialState() {
-  return { mode: 'manual', view: { x: 0, y: 0, scale: 1 }, size: { w: 1, h: 1 }, cards: [], sorted: null, drag: null };
+  return { mode: 'manual', view: { x: 0, y: 0, scale: 1 }, size: { w: 1, h: 1 }, cards: [], groups: [], sorted: null, drag: null };
 }
 
 export function rectOf(state, card) {
@@ -37,9 +45,37 @@ export function rectOf(state, card) {
 
 const toPx = (state, e) => ({ x: e.x * state.size.w, y: e.y * state.size.h });
 
+const groupById = (state, id) => (state.groups ?? []).find(g => g && g.id === id && !g.deleted) ?? null;
+
+// 그려지고 맞는 카드. 수동 모드에서는 접힌 묶음의 카드를 뺀다.
+export function visibleCards(state) {
+  if (state.mode === 'sorted') return state.cards;
+  return state.cards.filter(c => !(c.groupId && groupById(state, c.groupId)?.collapsed));
+}
+
+const members = (state, groupId) =>
+  state.cards.filter(c => c.groupId === groupId).map(c => ({ cardId: c.id, rect: { ...c.manual } }));
+
+function groupDown(state, e, p, hit) {
+  const g = hit.group;
+  const base = {
+    pointerId: e.pointer_id, start: p, moved: false, noticed: false, cardId: null,
+    groupId: g.id, origView: { ...state.view }, orig: { ...g.rect }, rect: { ...g.rect },
+  };
+  if (hit.zone === 'body') return { ...base, kind: 'pan' }; // 끌면 pan, 클릭하면 묶음 선택
+  if (hit.zone === 'resize') return { ...base, kind: 'group_resize' };
+  const cards = members(state, g.id);
+  return { ...base, kind: 'group', toggle: hit.zone === 'toggle', origCards: cards, cards };
+}
+
 function onDown(state, e) {
   const p = toPx(state, e);
-  const hit = hitTest(state.cards, (c) => rectOf(state, c), toWorld(state.view, p), state.view.scale);
+  const world = toWorld(state.view, p);
+  const hit = hitTest(visibleCards(state), (c) => rectOf(state, c), world, state.view.scale);
+  if (!hit && state.mode !== 'sorted') {
+    const g = hitTestGroup(state.groups, world, state.view.scale);
+    if (g) return { state: { ...state, drag: groupDown(state, e, p, g) }, effects: [] };
+  }
   let kind = 'pan';
   if (hit) kind = state.mode === 'sorted' ? 'blocked' : hit.zone === 'resize' ? 'resize' : 'card';
   const drag = {
@@ -74,6 +110,12 @@ function onMove(state, e) {
     next.rect = { ...d.orig, x: d.orig.x + dx / s, y: d.orig.y + dy / s };
   } else if (d.kind === 'resize') {
     next.rect = { ...d.orig, w: Math.max(MIN_CARD, d.orig.w + dx / s), h: Math.max(MIN_CARD, d.orig.h + dy / s) };
+  } else if (d.kind === 'group') {
+    const mx = dx / s, my = dy / s;
+    next.rect = { ...d.orig, x: d.orig.x + mx, y: d.orig.y + my };
+    next.cards = d.origCards.map(c => ({ cardId: c.cardId, rect: { ...c.rect, x: c.rect.x + mx, y: c.rect.y + my } }));
+  } else if (d.kind === 'group_resize') {
+    next.rect = { ...d.orig, w: Math.max(MIN_GROUP_W, d.orig.w + dx / s), h: Math.max(MIN_GROUP_H, d.orig.h + dy / s) };
   }
   return { state: { ...state, drag: next }, effects };
 }
@@ -82,9 +124,25 @@ function onUp(state, e) {
   let { state: s } = onMove(state, e);
   const d = s.drag;
   s = { ...s, drag: null };
-  if (!d.moved) return { state: s, effects: [{ type: 'select', cardId: d.cardId }] };
+  if (!d.moved) {
+    if (d.kind === 'group' && d.toggle) return { state: s, effects: [{ type: 'group_toggled', groupId: d.groupId }] };
+    if (d.groupId) return { state: s, effects: [{ type: 'select', cardId: null, groupId: d.groupId }] };
+    return { state: s, effects: [{ type: 'select', cardId: d.cardId }] };
+  }
   if (d.kind === 'card' || d.kind === 'resize') {
-    return { state: s, effects: [{ type: 'moved', cardId: d.cardId, rect: d.rect }] };
+    const effects = [{ type: 'moved', cardId: d.cardId, rect: d.rect }];
+    const was = state.cards.find(c => c.id === d.cardId)?.groupId ?? null;
+    const now = memberOf(state.groups, d.rect);
+    if (now !== was) {
+      effects.push({ type: 'membership', cardId: d.cardId, groupId: now });
+    }
+    return { state: s, effects };
+  }
+  if (d.kind === 'group') {
+    return { state: s, effects: [{ type: 'group_moved', groupId: d.groupId, rect: d.rect, cards: d.cards }] };
+  }
+  if (d.kind === 'group_resize') {
+    return { state: s, effects: [{ type: 'group_resized', groupId: d.groupId, rect: d.rect }] };
   }
   return { state: s, effects: [] };
 }
