@@ -42,9 +42,13 @@ export function createPlatform(client) {
     http: {
       read: (permission, path, query = {}) => client.http.read({ permission, path, query }),
     },
+    // 정의의 assets에 선언한 자산의 바이트(ArrayBuffer).
+    assetBytes: (id) => client.assets.bytes(id),
     publish: (patch) => client.publish(patch),
     getState: (key) => client.getState(key),
     setState: (key, value) => client.setState(key, value),
+    // 창 상태가 바뀌면 선언한 상태 키 전체를 받는다(sandbox가 쓴 selected, view, paste_inbox 등).
+    onState: (fn) => client.onStateChange(fn),
     handle: (name, fn) => client.handle(name, fn),
     onSurface: (name, fn) => client.surfaces.on(name, fn),
     // 리스너가 phase 'closing'에서 돌려준 promise는 쉘이 창을 닫기 전에 기다린다.

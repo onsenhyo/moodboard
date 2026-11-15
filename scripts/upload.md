@@ -1,9 +1,17 @@
 # 새 판 올리기
 
-1. `npm test && npm run build` — build는 2단계다. `build:viewer`가 내보내기 뷰어(`src/viewer/viewer.js`, layout.js·color.js 포함)를 iife로 묶어 `dist/viewer.txt`를 만들고, 이어서 `src/main.js`를 묶을 때 esbuild text loader(`--loader:.txt=text`)로 그 파일을 문자열로 넣는다(`src/main.js`의 `import VIEWER_JS from '../dist/viewer.txt'`).
-2. `node scripts/pack.mjs` — `dist/moodboard.upload.js`(gzip 로더)와 sha256, `dist/moodboard.upload.b64`를 낸다.
-3. `node scripts/gen-app.mjs <자산 판>` — 지난 자산 판보다 1 큰 수를 준다(`app/moodboard.json`).
-4. MCP `upload_asset`: id `moodboard`, version `<자산 판>`, format `javascript`, sha256은 2의 값, data_base64는 `.b64` 내용.
+1. `npm test && npm run build` — build는 다섯 단계다.
+   - `build:viewer`: 내보내기 뷰어(`src/viewer/viewer.js`)를 iife로 묶어 `dist/viewer.txt`.
+   - `build:export`: `src/export-entry.js`(export.js + 뷰어 글, text loader)를 iife(global `moodboardExport`)로 `dist/export.js`.
+   - `build:client`: `src/main.js` → `dist/moodboard.js`. `build:board`: `src/board/board.js` → `dist/board.js`.
+   - `scripts/pack.mjs`: 올릴 자산 세 개를 만들고 base64 크기와 sha256을 찍는다(`dist/assets.json`에도 남는다).
+     각 base64가 28,000자를 넘으면 빌드가 실패한다.
+2. 올릴 자산(바뀐 것만 판을 1 올린다)
+   - `moodboard` (javascript, client 로더): `dist/moodboard.upload.b64`
+   - `moodboard-board` (html, sandbox 보드): `dist/board.upload.b64`
+   - `moodboard-export` (javascript, 내보내기 코드와 뷰어. client가 내보낼 때만 `assets.bytes`로 읽는다): `dist/export.upload.b64`
+3. `node scripts/gen-app.mjs <client 판> <board 판> <export 판>` → `app/moodboard.json`.
+4. MCP `upload_asset`을 자산마다: id, version, format, sha256은 1의 값, data_base64는 `.b64` 내용.
 5. MCP `preview_app`(definition = `app/moodboard.json`) — 오류와 warnings가 없어야 한다.
 6. MCP `upload_app`(같은 definition) — `open_sent_to`가 1 이상인지 본다.
 7. MCP `get_workspace` — 창이 새 판으로 떴고 data_errors가 없는지 본다.

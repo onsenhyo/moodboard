@@ -1,5 +1,7 @@
 // app/moodboard.json을 만든다. 썸네일 저장 항목 128개를 손으로 쓰지 않으려고 둔 스크립트다.
-// 사용: node scripts/gen-app.mjs [자산 판]   (자산 판 기본값 1. dist/moodboard.js를 올린 판과 맞춘다)
+// 사용: node scripts/gen-app.mjs [client 판] [board 판] [export 판]
+//   client는 자산 moodboard(dist/moodboard.upload.js), board는 moodboard-board(dist/board.html),
+//   export는 moodboard-export(dist/export.upload.js). 기본값 8 1 1. 올린 판과 맞춘다.
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -7,10 +9,14 @@ import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ASSET_ID = 'moodboard';
-const ASSET_VERSION = Number(process.argv[2] ?? 1);
-const SHARDS = 128; // src/main.js의 SHARDS와 같아야 한다.
+const BOARD_ASSET = 'moodboard-board';
+const EXPORT_ASSET = 'moodboard-export'; // src/main.js의 EXPORT_ASSET과 같아야 한다.
+const [ASSET_VERSION, BOARD_VERSION, EXPORT_VERSION] = [8, 1, 1].map((d, i) => Number(process.argv[2 + i] ?? d));
+const SHARDS = 128; // src/main.js와 src/board/board.js의 SHARDS와 같아야 한다.
 
-if (!Number.isInteger(ASSET_VERSION) || ASSET_VERSION < 1) throw new Error('자산 판은 1 이상의 정수');
+for (const v of [ASSET_VERSION, BOARD_VERSION, EXPORT_VERSION]) {
+  if (!Number.isInteger(v) || v < 1) throw new Error('자산 판은 1 이상의 정수');
+}
 
 const shardId = (i) => 'thumbs_' + String(i).padStart(3, '0');
 
@@ -160,11 +166,15 @@ const outputs = {
 };
 
 const actions = [
-  'drop', 'pick', 'add_text', 'sort_color', 'sort_manual', 'zoom_in', 'zoom_out', 'zoom_fit', 'pointer',
+  'drop', 'pick', 'add_text', 'sort_color', 'sort_manual', 'zoom_in', 'zoom_out', 'zoom_fit',
   'delete_selected', 'set_text_color', 'set_text', 'toggle_include_video', 'board_select', 'board_new',
   'board_rename', 'export', 'group_add', 'group_rename', 'group_delete',
   'set_board_bg', 'reset_board_bg', 'set_text_paper', 'reset_text_paper',
 ];
+
+// --- 창 상태 ---
+// board(client가 씀), mode·cmd(툴바 → client가 씀), selected(보드가 쓰고 client도 씀), view·paste_inbox(보드가 씀).
+const BOARD_STATE = ['board', 'selected', 'view', 'mode', 'cmd', 'paste_inbox'];
 
 // --- 화면 ---
 
@@ -294,7 +304,12 @@ const ui = {
     {
       type: 'split', direction: 'row', sizes: [0.72, 0.28],
       children: [
-        { type: 'canvas', surface: 'board', on_pointer: c('pointer'), description: '무드보드' },
+        // 보드는 sandbox가 그린다(src/board/board.js). 보통 iframe이라 wheel, 집기, 키보드, 붙여넣기를 받고
+        // 쉘 테두리 없이 surface-solid 바탕에 놓인다. 주고받는 창 상태는 BOARD_STATE.
+        {
+          type: 'sandbox', asset: BOARD_ASSET, title: '무드보드: 끌어 옮기고, 두 손가락으로 이동, 집어서 확대',
+          state_keys: BOARD_STATE, storage_entries: storageIds,
+        },
         side,
       ],
     },
@@ -316,15 +331,22 @@ const app = {
       paths: ['/originals/', '/1200x/', '/736x/', '/564x/', '/474x/', '/236x/'],
     },
   ],
-  state: { draft: '', board_name: '', board: null, yt_embed: null, rename_open: false, group_name: '', theme: 'light' },
-  assets: [{ id: ASSET_ID, version: ASSET_VERSION }],
+  state: {
+    draft: '', board_name: '', board: null, yt_embed: null, rename_open: false, group_name: '', theme: 'light',
+    selected: null, view: null, mode: 'manual', cmd: null, paste_inbox: null,
+  },
+  assets: [
+    { id: ASSET_ID, version: ASSET_VERSION },
+    { id: BOARD_ASSET, version: BOARD_VERSION },
+    { id: EXPORT_ASSET, version: EXPORT_VERSION },
+  ],
   storage: { entries: [boardsEntry, ...thumbEntries] },
   client: {
     runtime: 'javascript',
     entry: { id: ASSET_ID, version: ASSET_VERSION },
     outputs: Object.fromEntries(Object.entries(outputs).map(([k, v]) => [k, { default: v }])),
     actions,
-    state_keys: ['draft', 'board_name', 'board', 'yt_embed', 'rename_open', 'group_name', 'theme'],
+    state_keys: ['draft', 'board_name', 'yt_embed', 'rename_open', 'group_name', 'theme', ...BOARD_STATE],
     storage_entries: storageIds,
     http_permissions: ['yt-oembed', 'yt-thumb', 'pin-oembed', 'pin-img'],
     device_storage: { prefixes: ['orig/'] },
@@ -343,4 +365,5 @@ const app = {
 
 mkdirSync(join(ROOT, 'app'), { recursive: true });
 writeFileSync(join(ROOT, 'app', 'moodboard.json'), JSON.stringify(app, null, 2) + '\n');
-console.log(`app/moodboard.json: 자산 ${ASSET_ID}@${ASSET_VERSION}, 저장 항목 ${storageIds.length}개`);
+console.log(`app/moodboard.json: 자산 ${ASSET_ID}@${ASSET_VERSION}, ${BOARD_ASSET}@${BOARD_VERSION}, `
+  + `${EXPORT_ASSET}@${EXPORT_VERSION}, 저장 항목 ${storageIds.length}개`);

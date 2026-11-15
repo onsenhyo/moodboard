@@ -6,7 +6,10 @@
   "scripts": {
     "test": "node --test 'test/**/*.test.js'",
     "build:viewer": "esbuild src/viewer/viewer.js --bundle --format=iife --minify --outfile=dist/viewer.txt",
-    "build": "npm run build:viewer && esbuild src/main.js --bundle --format=iife --minify --loader:.txt=text --outfile=dist/moodboard.js"
+    "build:client": "esbuild src/main.js --bundle --format=iife --minify --outfile=dist/moodboard.js",
+    "build:board": "esbuild src/board/board.js --bundle --format=iife --minify --outfile=dist/board.js",
+    "build": "npm run build:viewer && npm run build:export && npm run build:client && npm run build:board && node scripts/pack.mjs",
+    "build:export": "esbuild src/export-entry.js --bundle --format=iife --global-name=moodboardExport --minify --loader:.txt=text --outfile=dist/export.js"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

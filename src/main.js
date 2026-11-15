@@ -1,27 +1,28 @@
-// client 진입점. 플랫폼 핸들러를 순수 모듈과 render.js에 잇는다.
+// client 진입점. 플랫폼 핸들러를 순수 모듈에 잇는다.
+// 보드 그리기와 조작은 sandbox(board/board.js)가 맡는다. client는 넣기, 링크, blobs, 옆 칸, 내보내기,
+// 보드 관리를 맡고, 창 상태로 sandbox와 주고받는다.
+// - 읽기: selected {kind, id}|null, view {cx, cy, scale}, paste_inbox {text, n}
+// - 쓰기: board(지금 보드 id), mode, cmd {op, n}, selected(묶음 추가와 지우기)
 
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
-import { sortedLayout, SORT_CELL, SORT_GAP, toWorld } from './layout.js';
 import { BOARDS_ENTRY, mergeBoards, saveWithRetry, shardIdOf, createThumbStore } from './store.js';
 import { ingestFiles, ingestText } from './ingest.js';
 import { makeThumb } from './thumb.js';
-import { reduce, initialState, placeNear, zoomAt, fitView, sortCols } from './interaction.js';
-import { createRenderer } from './render.js';
+import { placeNear } from './interaction.js';
 import { THEMES, themeName } from './theme.js';
+import { normSelected, resolveSelected, deleteCard, deleteGroup, viewCenter } from './selection.js';
 import { createGate, retryRead, createSaver } from './startup.js';
 import { panelOutputs } from './panel.js';
 import { createPreview } from './preview.js';
-import { planExport, buildExportChunks, exportMessages, runExport } from './export.js';
-// 빌드 1단계(npm run build:viewer)가 만든 뷰어 iife. esbuild text loader로 문자열이 된다.
-import VIEWER_JS from '../dist/viewer.txt';
 
-const SURFACE = 'board';
 const PREVIEW_SURFACE = 'preview';
+// 내보내기 코드와 뷰어(src/export-entry.js). client 자산 크기를 줄이려고 따로 올린 javascript 자산이다.
+// 내용은 base64(gzip(iife)) 문자열 리터럴 한 문장이고(scripts/pack.mjs), 내보낼 때만 읽어 풀고 eval한다.
+const EXPORT_ASSET = 'moodboard-export';
 const EMBED_STATE = 'yt_embed';
 const SHARDS = 128;
 const DRAG_SAVE_MS = 400;
-const ZOOM_STEP = 1.25;
 const FULL_NOTICE = '썸네일 저장 공간이 가득 찼어요 (약 1,200장)';
 const NO_ORIG_NOTICE = '원본은 다른 PC에 있어요';
 const DEFAULT_BOARD = '내 보드';
@@ -33,9 +34,10 @@ const p = createPlatform(window.kaleidoscope);
 
 let doc = { version: 1, boards: [] };
 let boardId = null;
-let ui = initialState();
-let selectedId = null;
+let mode = 'manual';
+let selectedId = null; // 창 상태 selected에서 온다(sandbox가 쓴다)
 let selectedGroupId = null; // 선택한 묶음. selectedId와 함께 참이 되지 않는다
+let boardState; // 마지막으로 쓴 창 상태 board
 let notice = null;
 let thumbs = null;
 let loaded = false; // boards를 한 번이라도 읽었는가
@@ -61,22 +63,17 @@ function ensureBoard() {
     boardId = b.id;
     scheduleSave();
   }
+  // sandbox 보드는 창 상태 board로 지금 보드를 안다.
+  if (loaded && boardId && boardId !== boardState) {
+    boardState = boardId;
+    p.setState('board', boardId);
+  }
 }
 
 function touchCard(id, patch, t = Date.now()) {
   const c = cardById(id);
   if (!c) return null;
   Object.assign(c, patch, { updatedAt: t });
-  return c;
-}
-
-// 카드를 묶음에서 뺄 때는 groupId 키를 지운다(저장 스키마가 문자열만 받아 null을 쓰지 않는다).
-function setCardGroup(id, groupId, t = Date.now()) {
-  const c = cardById(id);
-  if (!c) return null;
-  if (typeof groupId === 'string' && groupId) c.groupId = groupId;
-  else delete c.groupId;
-  c.updatedAt = t;
   return c;
 }
 
@@ -94,7 +91,7 @@ const saver = createSaver(async () => {
   const next = await saveWithRetry(p.storage, (d) => d, { local: doc });
   // 저장하는 동안 바뀐 로컬 내용이 이기도록 로컬을 앞에 둔다.
   doc = mergeBoards(doc, next);
-  refresh(false);
+  refresh();
 }, { onError: (err) => setNotice(err?.message ?? '저장하지 못했어요') });
 
 const scheduleSave = (ms = 0) => saver.schedule(ms);
@@ -187,14 +184,28 @@ async function publishSelected() {
   publishPanel(selected);
 }
 
-// 카드 하나 또는 묶음 하나를 고른다. 둘 다 null이면 선택을 푼다.
-function select({ cardId = null, groupId = null } = {}) {
+// 카드 하나 또는 묶음 하나를 고른다. 둘 다 null이면 선택을 푼다. write이면 창 상태 selected에도 쓴다.
+function select({ cardId = null, groupId = null } = {}, write = true) {
   const prevGroup = selectedGroupId;
   selectedId = cardId;
   selectedGroupId = cardId ? null : groupId;
   // 이름 입력칸은 묶음을 새로 고를 때만 채운다(입력 중인 글을 덮지 않는다).
   if (selectedGroupId && selectedGroupId !== prevGroup) p.setState('group_name', groupById(selectedGroupId)?.name ?? '');
+  if (write) {
+    const sel = selectedId ? { kind: 'card', id: selectedId } : selectedGroupId ? { kind: 'group', id: selectedGroupId } : null;
+    if (JSON.stringify(normSelected(p.getState('selected'))) !== JSON.stringify(sel)) p.setState('selected', sel);
+  }
   publishSelected();
+}
+
+// 창 상태 selected(sandbox가 쓴다)를 옆 칸에 옮긴다.
+function onSelectedState(value) {
+  const s = normSelected(value);
+  const cardId = s?.kind === 'card' ? s.id : null;
+  const groupId = s?.kind === 'group' ? s.id : null;
+  if (cardId === selectedId && groupId === selectedGroupId) return;
+  select({ cardId, groupId }, false);
+  clearNotice();
 }
 
 function publishBoards() {
@@ -210,28 +221,18 @@ function publishBoards() {
 }
 
 function publishMode() {
-  p.publish({ mode: ui.mode, sorted: ui.mode === 'sorted', manual_mode: ui.mode === 'manual' });
+  p.publish({ mode, sorted: mode === 'sorted', manual_mode: mode === 'manual' });
 }
 
-// --- 그리기 ---
+// --- 테마 ---
 
 // 쉘 테마(시스템이면 OS 설정)를 frame의 prefers-color-scheme으로 받는다.
 const darkQuery = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
 let themeKey = themeName(!!darkQuery?.matches);
 
-const renderer = createRenderer({
-  scene: () => ({
-    cards: ui.cards, groups: ui.groups, view: ui.view, selectedId, selectedGroupId, drag: ui.drag, mode: ui.mode,
-    bg: board()?.bg,
-  }),
-  thumbB64: (id) => (thumbs ? thumbs.get(id) : Promise.resolve(null)),
-  theme: () => THEMES[themeKey],
-});
-
 function setTheme(name) {
   if (name !== themeKey) {
     themeKey = name;
-    renderer.redraw();
     preview.redraw();
     // [배경]과 [종이 색]의 기본값은 테마를 따른다.
     publishBoards();
@@ -241,46 +242,56 @@ function setTheme(name) {
 }
 darkQuery?.addEventListener?.('change', (e) => setTheme(themeName(!!e.matches)));
 
-function targets() {
-  const m = new Map();
-  for (const c of ui.cards) m.set(c.id, ui.mode === 'sorted' ? ui.sorted.get(c.id) : c.manual);
-  return m;
+// 다른 쪽(sandbox나 다른 PC)이 지운 카드의 썸네일과 원본을 걷어낸다. 처음 읽은 묘비는 건드리지 않는다.
+const knownDeleted = new Set();
+let sweptOnce = false;
+function sweepDeleted() {
+  if (!loaded) return;
+  for (const b of doc.boards) {
+    for (const c of b.cards ?? []) {
+      if (!c.deleted || knownDeleted.has(c.id)) continue;
+      knownDeleted.add(c.id);
+      if (sweptOnce) cleanupCard(c);
+    }
+  }
+  sweptOnce = true;
+}
+function cleanupCard(c) {
+  // 공간 정리는 실패해도 카드 삭제에는 영향이 없다.
+  if (c.hasThumb && thumbs) thumbs.remove(c.id).catch(() => {});
+  if (c.origKey) p.blobs.remove(c.origKey).catch(() => {});
 }
 
-// 문서가 바뀐 뒤 화면 상태를 다시 맞춘다.
-function refresh(animate) {
+// 고른 것이 지워졌거나 다른 보드의 것이면 참. 아직 모르는 id(다른 PC에서 막 온 카드)는 남긴다.
+function selectionGone() {
+  const sel = selectedId ? { kind: 'card', id: selectedId } : { kind: 'group', id: selectedGroupId };
+  if (resolveSelected(sel, board())) return false;
+  const key = sel.kind === 'card' ? 'cards' : 'groups';
+  return doc.boards.some((b) => (b[key] ?? []).some((x) => x.id === sel.id));
+}
+
+// 문서가 바뀐 뒤 출력을 다시 맞춘다. 고른 것이 사라졌으면 선택을 푼다.
+function refresh() {
   ensureBoard();
-  const cards = liveCards();
-  const sorted = sortedLayout(cards, { cols: sortCols(cards.length), cell: SORT_CELL, gap: SORT_GAP });
-  ui = { ...ui, cards, groups: boardGroups(), sorted };
-  if (selectedId && !cardById(selectedId)) select();
-  else if (selectedGroupId && !groupById(selectedGroupId)) select();
-  renderer.setTargets(targets(), animate);
+  sweepDeleted();
+  if (loaded && (selectedId || selectedGroupId) && selectionGone()) select();
   publishBoards();
 }
 
-// 문서 객체를 고친 뒤 화면 상태만 다시 맞춘다(정렬 배치는 그대로).
-function syncUi() {
-  ui = { ...ui, cards: liveCards(), groups: boardGroups() };
-  renderer.setTargets(targets(), false);
-}
-
-function surfaceSize() {
-  const s = renderer.surface;
-  return s ? { w: s.cssWidth, h: s.cssHeight } : ui.size;
-}
+// 새 카드와 묶음은 sandbox가 알린 화면 가운데(창 상태 view)에 놓는다.
+const center = () => viewCenter(p.getState('view'));
 
 // --- 넣기 ---
 
 function ingestDeps() {
-  const size = surfaceSize();
+  const c = center();
   return {
     readBytes: (id) => p.files.read(id),
     blobPut: (key, fileId) => p.blobs.put(key, fileId),
     makeThumb,
     thumbs,
     now: Date.now,
-    placeAt: () => placeNear(ui.view, size),
+    placeAt: () => placeNear({ x: c.x, y: c.y, scale: c.scale }, { w: 0, h: 0 }),
     httpRead: (permission, path, query) => p.http.read(permission, path, query),
   };
 }
@@ -289,7 +300,7 @@ function addCards(cards, full) {
   const b = board();
   if (b && cards.length) {
     b.cards.push(...cards);
-    refresh(false);
+    refresh();
     scheduleSave();
   }
   if (full) setNotice(FULL_NOTICE);
@@ -312,99 +323,54 @@ async function onFiles({ event } = {}) {
 p.handle('drop', onFiles);
 p.handle('pick', onFiles);
 
-p.handle('add_text', async ({ event } = {}) => {
-  const raw = typeof event === 'string' ? event : p.getState('draft');
+async function addText(raw, clearDraft) {
   if (typeof raw !== 'string' || !raw.trim()) return;
   await ready.run(async () => {
     const { card, full } = await ingestText(raw, ingestDeps());
     addCards(card ? [card] : [], full);
-    if (card) p.setState('draft', '');
+    if (card && clearDraft) p.setState('draft', '');
   });
-});
+}
 
-function setMode(mode) {
-  if (ui.mode === mode) return;
-  ui = { ...ui, mode, drag: null };
-  renderer.setTargets(targets(), true);
+p.handle('add_text', ({ event } = {}) => addText(typeof event === 'string' ? event : p.getState('draft'), true));
+
+// sandbox 보드에서 ⌘V로 붙여 넣은 글. n이 바뀔 때만 넣는다(창을 다시 열 때 남은 값은 넣지 않는다).
+let pasteSeen = p.getState('paste_inbox')?.n;
+function onPasteState(v) {
+  if (!v || typeof v !== 'object' || v.n === pasteSeen) return;
+  pasteSeen = v.n;
+  addText(v.text, false).catch((err) => setNotice(err?.message ?? '넣지 못했어요'));
+}
+
+function setMode(next) {
+  if (mode === next) return;
+  mode = next;
+  p.setState('mode', mode);
   publishMode();
   clearNotice();
 }
 p.handle('sort_color', () => setMode('sorted'));
 p.handle('sort_manual', () => setMode('manual'));
 
-function zoom(factor) {
-  const size = surfaceSize();
-  ui = { ...ui, view: zoomAt(ui.view, factor, { x: size.w / 2, y: size.h / 2 }) };
-  renderer.redraw();
-}
-p.handle('zoom_in', () => zoom(ZOOM_STEP));
-p.handle('zoom_out', () => zoom(1 / ZOOM_STEP));
-p.handle('zoom_fit', () => {
-  ui = { ...ui, view: fitView([...targets().values()].filter(Boolean), surfaceSize()) };
-  renderer.redraw();
-});
-
-p.handle('pointer', ({ event } = {}) => {
-  const s = renderer.surface;
-  if (!s) return;
-  const prevDrag = ui.drag;
-  const r = reduce({ ...ui, size: { w: s.cssWidth, h: s.cssHeight } }, event);
-  ui = r.state;
-  for (const e of r.effects) {
-    if (e.type === 'select') {
-      select({ cardId: e.cardId ?? null, groupId: e.groupId ?? null });
-      clearNotice();
-    } else if (e.type === 'moved') {
-      touchCard(e.cardId, { manual: { ...e.rect } });
-      syncUi();
-      scheduleSave(DRAG_SAVE_MS);
-      clearNotice();
-    } else if (e.type === 'membership') {
-      setCardGroup(e.cardId, e.groupId);
-      syncUi();
-      scheduleSave(DRAG_SAVE_MS);
-      if (selectedGroupId) publishSelected(); // 카드 수가 바뀐다
-    } else if (e.type === 'group_moved') {
-      // 묶음과 안의 카드를 한 번의 저장(saveWithRetry 한 번)에 담는다. 디바운스하지 않는다.
-      const t = Date.now();
-      touchGroup(e.groupId, { rect: { ...e.rect } }, t);
-      for (const m of e.cards ?? []) touchCard(m.cardId, { manual: { ...m.rect } }, t);
-      syncUi();
-      scheduleSave(0);
-      clearNotice();
-    } else if (e.type === 'group_resized') {
-      touchGroup(e.groupId, { rect: { ...e.rect } });
-      syncUi();
-      scheduleSave(DRAG_SAVE_MS);
-      clearNotice();
-    } else if (e.type === 'group_toggled') {
-      const g = groupById(e.groupId);
-      if (g) touchGroup(g.id, { collapsed: !g.collapsed });
-      // 접혀서 숨은 카드는 선택을 푼다
-      if (g?.collapsed && cardById(selectedId)?.groupId === g.id) select();
-      syncUi();
-      scheduleSave(DRAG_SAVE_MS);
-      clearNotice();
-    } else if (e.type === 'notice') {
-      setNotice(e.text);
-    }
-  }
-  if (ui.drag || prevDrag) renderer.redraw();
-});
+// 확대와 맞춤은 sandbox가 한다. n은 같은 단추를 다시 눌러도 바뀌게 하는 번호다.
+let cmdSeq = 0;
+const sendCmd = (op) => p.setState('cmd', { op, n: Date.now() * 1000 + (cmdSeq++ % 1000) });
+p.handle('zoom_in', () => sendCmd('zoom_in'));
+p.handle('zoom_out', () => sendCmd('zoom_out'));
+p.handle('zoom_fit', () => sendCmd('fit'));
 
 // --- 묶음 ---
 
 p.handle('group_add', () => {
   const b = board();
   if (!b) return;
-  if (ui.mode !== 'manual') setMode('manual'); // 정렬 모드에서는 묶음이 보이지 않는다
-  const size = surfaceSize();
-  const c = toWorld(ui.view, { x: size.w / 2, y: size.h / 2 });
+  if (mode !== 'manual') setMode('manual'); // 정렬 모드에서는 묶음이 보이지 않는다
+  const c = center();
   const { w, h } = GROUP_DEFAULT_SIZE;
   const g = newGroup({ rect: { x: c.x - w / 2, y: c.y - h / 2, w, h } });
   if (!Array.isArray(b.groups)) b.groups = [];
   b.groups.push(g);
-  refresh(false);
+  refresh();
   select({ groupId: g.id });
   scheduleSave();
   clearNotice();
@@ -417,7 +383,6 @@ p.handle('group_rename', ({ event } = {}) => {
   if (!g || !name) return;
   if (name !== g.name) {
     touchGroup(g.id, { name });
-    syncUi();
     scheduleSave(DRAG_SAVE_MS);
   }
   p.setState('group_name', name);
@@ -426,36 +391,30 @@ p.handle('group_rename', ({ event } = {}) => {
 });
 
 p.handle('group_delete', () => {
-  const g = groupById(selectedGroupId);
-  if (!g) return;
-  const t = Date.now();
   // 묶음은 묘비로 남기고, 안의 카드는 groupId를 지운다. 카드 자체는 남는다.
-  for (const c of groupCards(g.id)) setCardGroup(c.id, null, t);
-  touchGroup(g.id, { deleted: true }, t);
+  if (!deleteGroup(board(), selectedGroupId)) return;
   select();
-  refresh(false);
+  refresh();
   scheduleSave();
   clearNotice();
 });
 
 p.handle('delete_selected', async () => {
-  const c = cardById(selectedId);
+  const c = deleteCard(board(), selectedId);
   if (!c) return;
-  touchCard(c.id, { deleted: true });
+  knownDeleted.add(c.id);
   select();
-  refresh(false);
+  refresh();
   scheduleSave();
   clearNotice();
-  // 공간 정리는 실패해도 카드 삭제에는 영향이 없다.
-  if (c.hasThumb && thumbs) thumbs.remove(c.id).catch(() => {});
-  if (c.origKey) p.blobs.remove(c.origKey).catch(() => {});
+  cleanupCard(c);
 });
 
 p.handle('set_text_color', ({ event } = {}) => {
   const c = cardById(selectedId);
   if (!c || c.kind !== 'text' || typeof event !== 'string' || !HEX.test(event)) return;
   touchCard(c.id, { color: event.toLowerCase() });
-  refresh(false);
+  refresh();
   scheduleSave();
   publishSelected();
   clearNotice();
@@ -470,7 +429,6 @@ function setBoardBg(value) {
   else b.bg = value;
   b.updatedAt = Date.now();
   publishBoards();
-  renderer.redraw();
   scheduleSave(DRAG_SAVE_MS);
   clearNotice();
 }
@@ -490,7 +448,7 @@ function setTextPaper(value) {
   if (value === null) delete c.paper;
   else c.paper = value;
   c.updatedAt = Date.now();
-  refresh(false);
+  refresh();
   scheduleSave(DRAG_SAVE_MS);
   publishSelected();
   clearNotice();
@@ -511,7 +469,7 @@ p.handle('set_text', ({ event } = {}) => {
   if (!c || c.kind !== 'text' || typeof event !== 'string') return;
   const first = event.split(/\r?\n/)[0];
   touchCard(c.id, { text: event, title: [...first].slice(0, 40).join('') });
-  refresh(false);
+  refresh();
   scheduleSave();
   publishSelected();
   clearNotice();
@@ -536,10 +494,8 @@ p.handle('board_select', ({ event } = {}) => {
   const id = typeof event === 'string' ? event : event?.value;
   if (!liveBoards().some((b) => b.id === id) || id === boardId) return;
   boardId = id;
-  p.setState('board', id);
   select();
-  ui = { ...ui, drag: null, view: { x: 0, y: 0, scale: 1 } };
-  refresh(false);
+  refresh();
   clearNotice();
 });
 
@@ -547,10 +503,8 @@ p.handle('board_new', () => {
   const b = newBoard(`보드 ${liveBoards().length + 1}`);
   doc.boards.push(b);
   boardId = b.id;
-  p.setState('board', b.id);
   select();
-  ui = { ...ui, drag: null, view: { x: 0, y: 0, scale: 1 } };
-  refresh(false);
+  refresh();
   scheduleSave();
   clearNotice();
 });
@@ -571,6 +525,18 @@ p.handle('board_rename', ({ event } = {}) => {
 // --- 내보내기 ---
 
 let exporting = false;
+let exportMod = null;
+
+async function loadExport() {
+  if (exportMod) return exportMod;
+  const text = new TextDecoder().decode(await p.assetBytes(EXPORT_ASSET)).trim();
+  const bytes = Uint8Array.from(atob(JSON.parse(text.replace(/;$/, ''))), (ch) => ch.charCodeAt(0));
+  const js = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  (0, eval)(js); // var moodboardExport = ...
+  exportMod = globalThis.moodboardExport;
+  if (!exportMod?.runExport) throw new Error('내보내기 자산을 읽지 못했어요');
+  return exportMod;
+}
 
 function publishExportInfo(text) {
   p.publish({ export_info: text, has_export_info: text !== '' });
@@ -595,6 +561,7 @@ p.handle('export', async () => {
     await ready.run(async () => {
       const b = board();
       if (!b) return;
+      const { planExport, buildExportChunks, exportMessages, runExport, VIEWER_JS } = await loadExport();
       const cards = liveCards();
       const thumbB64 = new Map();
       for (const c of cards) {
@@ -636,9 +603,9 @@ p.handle('export', async () => {
 
 p.onSurface(PREVIEW_SURFACE, (surface) => preview.attach(surface));
 
-p.onSurface(SURFACE, (surface) => {
-  renderer.attach(surface);
-  if (surface) ui = { ...ui, size: { w: surface.cssWidth, h: surface.cssHeight } };
+p.onState((state) => {
+  onSelectedState(state.selected);
+  onPasteState(state.paste_inbox);
 });
 
 // 창을 닫을 때 쉘은 closing 리스너가 돌려준 promise와 이미 보낸 setStorage를 기다린다.
@@ -649,14 +616,14 @@ function finishBoardsLoad(value) {
   doc = mergeBoards(doc, value);
   if (loaded) return;
   loaded = true;
-  refresh(false);
+  refresh();
 }
 
 // 다른 PC의 변경. 시작하는 동안 온 값도 받으려고 읽기 전에 건다.
 p.storage.watch(BOARDS_ENTRY, (value) => {
   if (!loaded) { finishBoardsLoad(value); updateLoading(); return; }
   doc = mergeBoards(doc, value);
-  refresh(false);
+  refresh();
   if (selectedId || selectedGroupId) publishSelected();
 }, () => { /* 시작 읽기의 재시도가 알린다 */ });
 
@@ -664,7 +631,6 @@ p.storage.watch(BOARDS_ENTRY, (value) => {
 const pendingShards = new Map();
 function applyShard(id, value) {
   thumbs.reload(id, value);
-  renderer.invalidateThumbs();
   if (cardById(selectedId)?.hasThumb) publishSelected();
   updateLoading();
 }
@@ -693,6 +659,8 @@ async function start() {
   setTheme(themeKey);
   const saved = p.getState('board');
   if (typeof saved === 'string') boardId = saved;
+  if (p.getState('mode') === 'sorted') { mode = 'sorted'; publishMode(); }
+  onSelectedState(p.getState('selected'));
 
   // boards와 shard 읽기를 함께 시작한다. 실패한 읽기는 1·2·4초, 그다음 10초마다 다시 한다.
   const boardsLoad = retryRead(() => p.storage.get(BOARDS_ENTRY), { onFail: onReadFail, stop: () => loaded })
@@ -702,7 +670,6 @@ async function start() {
   thumbs = await createThumbStore(p.storage, { shards: SHARDS });
   for (const [id, value] of pendingShards) thumbs.reload(id, value);
   pendingShards.clear();
-  renderer.invalidateThumbs();
   const missing = thumbs.missing();
   if (missing.length) onReadFail();
   updateLoading();
