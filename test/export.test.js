@@ -301,3 +301,66 @@ test('runExport: 중간에 실패하면 abort하고 오류를 던진다', async 
   assert.deepEqual(files.calls.at(-1), ['abort', 'f1']);
   assert.ok(!files.calls.some((c) => c[0] === 'close'));
 });
+
+// --- 묶음과 테마 ---
+
+function groupFixture() {
+  const groups = [
+    { id: 'g-warm', name: 'Warm sunset', rect: { x: 0, y: 0, w: 520, h: 420 }, collapsed: false, updatedAt: 1 },
+    { id: 'g-teal', name: '청록', rect: { x: 600, y: 0, w: 400, h: 300 }, collapsed: true, updatedAt: 1 },
+    { id: 'g-gone', name: '지운 묶음', rect: { x: 0, y: 600, w: 400, h: 300 }, collapsed: false, updatedAt: 2, deleted: true },
+  ];
+  const cards = [
+    card('a', 'image', { hasThumb: true, groupId: 'g-warm', color: '#e67e22', manual: { x: 20, y: 40, w: 240, h: 180 } }),
+    card('b', 'text', { text: '빛이 부서지는 오후', groupId: 'g-warm', color: '#e67e22', manual: { x: 270, y: 40, w: 220, h: 140 } }),
+    card('c', 'image', { hasThumb: true, groupId: 'g-teal', color: '#16a085', manual: { x: 620, y: 40, w: 240, h: 180 } }),
+    card('d', 'image', { hasThumb: true, groupId: 'g-gone', color: '#2e86c1', manual: { x: 20, y: 640, w: 240, h: 180 } }),
+    card('e', 'link', { url: 'https://example.com/x', groupId: 'g-missing', manual: { x: 300, y: 640, w: 240, h: 180 } }),
+  ];
+  return { ...boardOf(cards, '묶음 보드'), groups };
+}
+
+async function exportHtml(b, viewerJs) {
+  const plan = planExport(b, { thumbSizes: new Map(), origSizes: new Map() });
+  const chunks = await collect(buildExportChunks(b, plan, {
+    thumb: async () => thumbB64(1), video: async () => null, viewerJs,
+  }));
+  return Buffer.concat(chunks).toString('utf8');
+}
+const boardJson = (html) => JSON.parse(/id="board">([\s\S]*?)<\/script>/.exec(html)[1]);
+
+test('board JSON에 살아 있는 묶음만 들어가고, 지운 묶음을 가리키는 groupId는 뺀다', async () => {
+  const data = boardJson(await exportHtml(groupFixture(), 'void 0'));
+  assert.deepEqual(data.groups.map((g) => g.id), ['g-warm', 'g-teal']);
+  assert.ok(!JSON.stringify(data).includes('g-gone'));
+  assert.ok(!JSON.stringify(data).includes('지운 묶음'));
+  const teal = data.groups.find((g) => g.id === 'g-teal');
+  assert.equal(teal.collapsed, true);
+  assert.equal(teal.name, '청록');
+  assert.deepEqual(teal.rect, { x: 600, y: 0, w: 400, h: 300 });
+  const byId = new Map(data.cards.map((c) => [c.id, c]));
+  assert.equal(byId.get('a').groupId, 'g-warm');
+  assert.equal(byId.get('c').groupId, 'g-teal');
+  assert.ok(!('groupId' in byId.get('d')), '지운 묶음');
+  assert.ok(!('groupId' in byId.get('e')), '없는 묶음');
+});
+
+test('묶음이 없는 옛 보드도 groups는 빈 배열', async () => {
+  const data = boardJson(await exportHtml(boardOf([card('a', 'image')]), 'void 0'));
+  assert.deepEqual(data.groups, []);
+});
+
+test('뷰어 번들에 두 테마 바탕색이 모두 들어 있다', async () => {
+  const js = await viewer();
+  assert.ok(js.includes('#f4f1ec'));
+  assert.ok(js.includes('#141416'));
+  assert.ok(js.includes('prefers-color-scheme: dark'));
+});
+
+test('내보낸 HTML에 둥근 모서리가 없다', async () => {
+  const html = await exportHtml(groupFixture(), await viewer());
+  writeFileSync('/tmp/moodboard-export-groups.html', html);
+  assert.doesNotMatch(html, /border-radius/i);
+  assert.doesNotMatch(html, /roundRect/);
+  assert.doesNotMatch(html, /arcTo/);
+});
