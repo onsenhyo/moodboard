@@ -16,6 +16,7 @@ import { sortedLayout, SORT_CELL, SORT_GAP, toWorld, hitTest } from '../layout.j
 import {
   canCrop, normCrop, FULL_CROP, cropHandleAt, dragCrop, cropApplyPatch, createCropTracker,
 } from '../crop.js';
+import { pasteValue } from '../dropxfer.js';
 import { createRenderer } from '../render.js';
 import { THEMES, themeName, boardTheme } from '../theme.js';
 import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore, isConflict } from '../store.js';
@@ -457,7 +458,10 @@ document.addEventListener('paste', (e) => {
   e.preventDefault();
   pasteBox.value = '';
   if (!text.trim()) return;
-  k.setState('paste_inbox', { text, n: Date.now() });
+  // 창 상태 전체가 64KiB를 넘으면 쓰기 전체가 거부되므로 미리 본다(dropxfer.js pasteValue).
+  const v = pasteValue(k.getState(), text, Date.now());
+  if (!v) { showToast('글이 너무 길어 붙여 넣지 못했어요. 나눠서 붙여 넣어 주세요'); return; }
+  k.setState('paste_inbox', v);
 });
 
 // --- 끌어 놓기 (Finder에서 보드 위로, drop.js) ---

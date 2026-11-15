@@ -1,13 +1,14 @@
 // 보드(sandbox) 위에 Finder에서 끌어 놓은 파일을 받는다. 순수 부분은 ../dropxfer.js에 있다.
 //
 // 보드는 iframe이라 쉘의 drag guard가 보드 위의 drop을 받지 못한다. 여기서 dragover와 drop을 막고(preventDefault)
-// File을 읽어 조각으로 나눠 창 상태 drop_inbox에 쓴다. client가 drop_ack로 받았다고 알리면 다음 조각을 쓴다.
+// File을 조각마다 slice로 읽어(한 번에 한 조각만 메모리에) 창 상태 drop_inbox에 쓴다. client가 drop_ack로
+// 받았다고 알리면 다음 조각을 읽어 쓴다. 창이 옮기는 도중에 닫혀 남은 조각은 다음에 열 때 비운다.
 // client는 조각을 모아 blobs에 넣고 file_drop과 같은 넣기(썸네일, 카드)를 돌려 놓은 자리에 카드를 둔다.
 // DROP_MAX_BYTES를 넘는 이미지는 여기서 줄인 JPEG 사본을 만들어 보내고, 영상은 파일 추가 단추를 안내한다.
 
 import {
-  DROP_STATE, DROP_ACK, DROP_MAX_BYTES, CHUNK_BYTES, sortDrop, chunkMessages, createAckChannel, clientToWorld,
-  progressText, reducedName, stateFits,
+  DROP_STATE, DROP_ACK, DROP_MAX_BYTES, CHUNK_BYTES, SANDBOX_STATE_LIMIT, sortDrop, streamMessages, createAckChannel,
+  clientToWorld, progressText, reducedName, stateFits, dropErrorText, leftoverInbox,
 } from '../dropxfer.js';
 
 const PROGRESS_FROM = 4 * CHUNK_BYTES; // 이보다 크면 옮기는 동안 진행 글을 보인다
@@ -44,8 +45,9 @@ export function installDrop({ k, canvas, getView, showToast, accent }) {
 
   const channel = createAckChannel({
     write: (msg) => {
-      // 다른 키와 합친 창 상태가 한도를 넘으면 쓰기 전체가 거부되므로 미리 본다.
-      if (!stateFits({ ...k.getState(), [DROP_STATE]: msg })) {
+      // 다른 키와 합친 창 상태가 한도를 넘으면 쓰기 전체가 거부되므로 미리 본다. 보드는 자기 키만 보므로
+      // 못 보는 키(draft 등)에 자리를 남긴 SANDBOX_STATE_LIMIT로 센다. 그래도 넘치면 받음이 오지 않아 timeout이 된다.
+      if (!stateFits({ ...k.getState(), [DROP_STATE]: msg }, SANDBOX_STATE_LIMIT)) {
         setTimeout(() => channel.onAck({ batch: msg.batch, seq: msg.seq, ok: false, error: 'state_full' }), 0);
         return;
       }
@@ -54,10 +56,17 @@ export function installDrop({ k, canvas, getView, showToast, accent }) {
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (id) => clearTimeout(id),
   });
-  k.onStateChange((state) => channel.onAck(state?.[DROP_ACK]));
-
   const queue = [];
   let running = false;
+
+  // 창이 옮기는 도중에 닫히면 finally의 비우기가 돌지 않아 조각(약 22KB)이 창 상태에 남는다. 이 프레임이 보내는
+  // 중이 아닐 때 남은 값을 보면 비운다. client는 null을 받지 않고 넘긴다(createReceiver).
+  const sweep = (v) => { if (leftoverInbox(v, running || queue.length > 0)) k.setState(DROP_STATE, null); };
+  sweep(k.getState(DROP_STATE));
+  k.onStateChange((state) => {
+    channel.onAck(state?.[DROP_ACK]);
+    if (state && DROP_STATE in state) sweep(state[DROP_STATE]);
+  });
 
   async function runQueue() {
     if (running) return;
@@ -71,26 +80,24 @@ export function installDrop({ k, canvas, getView, showToast, accent }) {
 
   async function sendBatch({ files, at, note }) {
     const batch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const msgs = chunkMessages(batch, files, at);
-    const total = files.reduce((n, f) => n + f.bytes.length, 0);
+    const total = files.reduce((n, f) => n + f.size, 0);
+    const read = async (f, start, end) => new Uint8Array(await f.blob.slice(start, end).arrayBuffer());
     let sent = 0;
     try {
-      for (const msg of msgs) {
+      for await (const msg of streamMessages(batch, files, at, read)) {
         if (total > PROGRESS_FROM) showToast(withNote(progressText(sent, total, msg.index, msg.total), note));
         await channel.send(msg);
         sent += Math.floor((msg.b64.length * 3) / 4);
       }
       if (total > PROGRESS_FROM) showToast(withNote(progressText(total, total, files.length - 1, files.length), note));
     } catch (err) {
-      const code = err?.code ?? err?.message;
-      showToast(code === 'state_full' ? '창 상태가 가득 차 파일을 옮기지 못했어요. 파일 추가 단추를 써 주세요'
-        : code === 'timeout' ? '파일을 옮기지 못했어요(응답 없음). 다시 끌어 놓거나 파일 추가 단추를 써 주세요'
-          : '파일을 옮기지 못했어요. 파일 추가 단추를 써 주세요');
+      showToast(dropErrorText(err?.code ?? err?.message));
     } finally {
       k.setState(DROP_STATE, null); // 조각이 창 상태 자리를 차지하지 않게 비운다
     }
   }
 
+  // 보낼 파일 목록 [{name, mime, size, blob, reduced?}]. 원본은 File 그대로 두고 보낼 때 조각만 읽는다.
   async function readFiles(picked, list) {
     const out = [];
     const notes = [];
@@ -98,12 +105,15 @@ export function installDrop({ k, canvas, getView, showToast, accent }) {
       const file = list[a.i];
       try {
         if (!a.big) {
-          out.push({ name: a.name, mime: a.mime, bytes: new Uint8Array(await file.arrayBuffer()) });
+          out.push({ name: a.name, mime: a.mime, size: file.size, blob: file });
           continue;
         }
         if (a.mime.startsWith('image/')) {
           const small = await reduceImage(file);
-          if (small) { out.push({ name: reducedName(a.name), mime: 'image/jpeg', bytes: small, reduced: true }); continue; }
+          if (small) {
+            out.push({ name: reducedName(a.name), mime: 'image/jpeg', size: small.size, blob: small, reduced: true });
+            continue;
+          }
         }
         notes.push(a.name);
       } catch {
@@ -164,7 +174,7 @@ export function installDrop({ k, canvas, getView, showToast, accent }) {
   return { overlay, get busy() { return running; } };
 }
 
-// 큰 이미지를 긴 변 2560px부터 줄여 DROP_MAX_BYTES 안의 JPEG로 만든다. 열 수 없으면 null.
+// 큰 이미지를 긴 변 2560px부터 줄여 DROP_MAX_BYTES 안의 JPEG Blob으로 만든다. 열 수 없으면 null.
 async function reduceImage(file) {
   const bmp = await createImageBitmap(file);
   try {
@@ -180,7 +190,7 @@ async function reduceImage(file) {
       const blob = c.convertToBlob
         ? await c.convertToBlob({ type: 'image/jpeg', quality })
         : await new Promise((res) => c.toBlob(res, 'image/jpeg', quality));
-      if (blob && blob.size <= DROP_MAX_BYTES) return new Uint8Array(await blob.arrayBuffer());
+      if (blob && blob.size <= DROP_MAX_BYTES) return blob;
     }
     return null;
   } finally {

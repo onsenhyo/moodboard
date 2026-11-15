@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   dropMime, chunkCount, chunkRanges, chunkMessages, createReceiver, createAckChannel, clientToWorld,
   dropPlacement, progressText, sortDrop, reducedName, bytesToB64, b64ToBytes, stateFits,
-  CHUNK_BYTES, CHUNK_B64_MAX, DROP_MAX_BYTES, WINDOW_STATE_MAX_BYTES,
+  chunkPlan, streamMessages, dropErrorText, leftoverInbox, pasteValue,
+  CHUNK_BYTES, CHUNK_B64_MAX, DROP_MAX_BYTES, WINDOW_STATE_MAX_BYTES, SANDBOX_STATE_LIMIT,
 } from '../src/dropxfer.js';
 import { toWorld } from '../src/layout.js';
 
@@ -69,13 +70,86 @@ test('chunkRanges: 경계와 빈 파일', () => {
   ]);
 });
 
-test('조각 하나와 다른 창 상태를 합쳐도 64KiB 안이다', () => {
+test('조각은 원본 16KiB(base64 약 21.8K자)라 보드가 못 보는 키에 넉넉히 자리를 남긴다', () => {
+  assert.equal(CHUNK_BYTES, 16 * 1024);
+  assert.equal(CHUNK_B64_MAX, 21848);
   const [m] = chunkMessages('b', [{ name: 'a'.repeat(200) + '.png', mime: 'image/png', bytes: bytesOf(CHUNK_BYTES) }], AT);
   assert.equal(m.b64.length, CHUNK_B64_MAX);
   const json = JSON.stringify({ drop_inbox: m });
-  assert.ok(json.length < WINDOW_STATE_MAX_BYTES / 2 + 1024, `조각 JSON ${json.length}`);
-  assert.ok(stateFits({ drop_inbox: m, view: { cx: 1, cy: 2, scale: 1 }, paste_inbox: { text: 'x'.repeat(20000), n: 1 } }));
-  assert.ok(!stateFits({ drop_inbox: m, paste_inbox: { text: 'x'.repeat(40000), n: 1 } }));
+  assert.ok(json.length < 23 * 1024, `조각 JSON ${json.length}`);
+  // 보드가 보는 키와 조각을 합쳐 SANDBOX_STATE_LIMIT 안이면 못 보는 키(draft 등)에 16KiB 넘게 남는다.
+  assert.ok(WINDOW_STATE_MAX_BYTES - SANDBOX_STATE_LIMIT >= 16 * 1024);
+  assert.ok(stateFits({ drop_inbox: m, view: { cx: 1, cy: 2, scale: 1 }, paste_inbox: { text: 'x'.repeat(20000), n: 1 } }, SANDBOX_STATE_LIMIT));
+  assert.ok(!stateFits({ drop_inbox: m, paste_inbox: { text: 'x'.repeat(30000), n: 1 } }, SANDBOX_STATE_LIMIT));
+});
+
+test('chunkPlan: b64 없이 조각 자리만 낸다', () => {
+  const plan = chunkPlan('b1', [
+    { name: 'a.png', mime: 'image/png', size: 25 },
+    { name: 'b.png', mime: 'image/png', size: 0, reduced: true },
+  ], AT, 10);
+  assert.deepEqual(plan.map((h) => [h.seq, h.index, h.part, h.parts, h.start, h.end, h.size]),
+    [[0, 0, 0, 3, 0, 10, 25], [1, 0, 1, 3, 10, 20, 25], [2, 0, 2, 3, 20, 25, 25], [3, 1, 0, 1, 0, 0, 0]]);
+  assert.ok(plan.every((h) => !('b64' in h) && h.total === 2 && h.batch === 'b1' && h.attempt === 0));
+  assert.equal(plan[3].reduced, true);
+});
+
+test('streamMessages: 조각마다 그 범위만 읽어 chunkMessages와 같은 값을 낸다', async () => {
+  const a = bytesOf(CHUNK_BYTES * 2 + 17, 3);
+  const b = bytesOf(100, 9);
+  const files = [{ name: 'a.png', mime: 'image/png', bytes: a }, { name: 'b.jpg', mime: 'image/jpeg', bytes: b, reduced: true }];
+  const reads = [];
+  const read = async (f, start, end) => { reads.push([f.name, start, end]); return f.bytes.subarray(start, end); };
+  const srcs = files.map((f) => ({ ...f, size: f.bytes.length }));
+  const out = [];
+  for await (const m of streamMessages('b1', srcs, AT, read)) {
+    // 다음 조각은 이 조각을 쓴 뒤에 읽는다(한 번에 한 조각만 메모리에).
+    assert.equal(reads.length, out.length + 1);
+    out.push(m);
+  }
+  assert.deepEqual(out, chunkMessages('b1', files, AT));
+  assert.deepEqual(reads, [['a.png', 0, CHUNK_BYTES], ['a.png', CHUNK_BYTES, CHUNK_BYTES * 2],
+    ['a.png', CHUNK_BYTES * 2, CHUNK_BYTES * 2 + 17], ['b.jpg', 0, 100]]);
+});
+
+test('streamMessages: 읽은 길이가 범위와 다르면(파일이 바뀜) 멈춘다', async () => {
+  const read = async () => new Uint8Array(3);
+  const it = streamMessages('b', [{ name: 'a.png', mime: 'image/png', size: 10 }], AT, read);
+  await assert.rejects(it.next(), (e) => e.code === 'read');
+});
+
+test('dropErrorText: 응답 없음은 창 상태가 가득 찼을 수 있다고 알린다', () => {
+  assert.match(dropErrorText('timeout'), /창 상태가 가득/);
+  assert.match(dropErrorText('timeout'), /파일 추가/);
+  assert.match(dropErrorText('state_full'), /창 상태가 가득/);
+  assert.match(dropErrorText('read'), /읽지 못/);
+  assert.match(dropErrorText('order'), /파일 추가/);
+});
+
+test('leftoverInbox: 보내는 중이 아닌데 값이 남아 있으면 비운다', () => {
+  assert.equal(leftoverInbox({ batch: 'x', seq: 3 }, false), true);
+  assert.equal(leftoverInbox({ batch: 'x', seq: 3 }, true), false);
+  assert.equal(leftoverInbox(null, false), false);
+  assert.equal(leftoverInbox(undefined, false), false);
+});
+
+test('남은 조각을 비운 null은 client 받는 쪽이 무시한다', () => {
+  const [m] = chunkMessages('old', [{ name: 'a.png', mime: 'image/png', bytes: bytesOf(3) }], AT);
+  const rx = createReceiver({ initial: m });
+  assert.equal(rx.receive(null), null);
+  const [n] = chunkMessages('new', [{ name: 'b.png', mime: 'image/png', bytes: bytesOf(3) }], AT);
+  assert.equal(rx.receive(n).file.name, 'b.png');
+});
+
+test('pasteValue: 창 상태에 들어가면 값을, 넘치면 null을 낸다', () => {
+  assert.deepEqual(pasteValue({ view: { cx: 0 } }, 'hello', 7), { text: 'hello', n: 7 });
+  assert.equal(pasteValue({}, 'x'.repeat(SANDBOX_STATE_LIMIT), 1), null);
+  // 이미 있는 paste_inbox는 새 값으로 바뀌므로 셈에서 뺀다
+  assert.ok(pasteValue({ paste_inbox: { text: 'y'.repeat(30000), n: 1 } }, 'x'.repeat(30000), 2));
+  // 남아 있는 조각은 함께 센다
+  const [m] = chunkMessages('b', [{ name: 'a.png', mime: 'image/png', bytes: bytesOf(CHUNK_BYTES) }], AT);
+  assert.equal(pasteValue({ drop_inbox: m }, 'x'.repeat(30000), 1), null);
+  assert.ok(pasteValue({ drop_inbox: m }, 'x'.repeat(20000), 1));
 });
 
 test('chunkMessages: seq는 파일을 넘어 이어지고 part는 파일마다 0부터', () => {
