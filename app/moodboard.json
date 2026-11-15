@@ -72,11 +72,15 @@
   "assets": [
     {
       "id": "moodboard",
-      "version": 10
+      "version": 11
     },
     {
-      "id": "moodboard-board",
-      "version": 3
+      "id": "moodboard-board-js-1",
+      "version": 1
+    },
+    {
+      "id": "moodboard-board-js-2",
+      "version": 1
     },
     {
       "id": "moodboard-export",
@@ -2074,7 +2078,7 @@
     "runtime": "javascript",
     "entry": {
       "id": "moodboard",
-      "version": 10
+      "version": 11
     },
     "outputs": {
       "selected": {
@@ -2127,6 +2131,9 @@
       },
       "sel_note": {
         "default": null
+      },
+      "board_html": {
+        "default": "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>무드보드</title><style>html,body{margin:0;height:100%;overflow:hidden;background:#f7f3f7;color:#302a36;font:13px system-ui,sans-serif}@media (prefers-color-scheme:dark){html,body{background:#2a2230;color:#ece3f2}}.mb-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:#675a70}@media (prefers-color-scheme:dark){.mb-msg{color:#b8a7c5}}</style></head><body><div class=\"mb-msg\" role=\"status\">보드를 불러오는 중…</div></body></html>\n"
       },
       "sel_heading": {
         "default": ""
@@ -2626,7 +2633,9 @@
         "children": [
           {
             "type": "sandbox",
-            "asset": "moodboard-board",
+            "value": {
+              "client": "board_html"
+            },
             "title": "무드보드: 끌어 옮기고, 두 손가락으로 이동, 집어서 확대",
             "state_keys": [
               "board",

@@ -1,4 +1,4 @@
-// sandbox 보드 진입점(html 자산 moodboard-board). 보드 그리기와 조작을 맡는다.
+// sandbox 보드 진입점(보드 코드 조각 moodboard-board-js-1..N, client가 board_html로 싣는다. src/boardhtml.js). 보드 그리기와 조작을 맡는다.
 //
 // 브리지: window.kaleidoscope (kaleidoscope ui/src/blocks/sandbox-frame.ts)
 // - storage boards, thumbs_000..127을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).

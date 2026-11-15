@@ -18,6 +18,7 @@ import {
 import { createGate, retryRead, createSaver } from './startup.js';
 import { panelOutputs, MEMO_KINDS } from './panel.js';
 import { createPreview } from './preview.js';
+import { loadBoardHtml, errorHtml } from './boardhtml.js';
 
 const PREVIEW_SURFACE = 'preview';
 // 내보내기 코드와 뷰어(src/export-entry.js). client 자산 크기를 줄이려고 따로 올린 javascript 자산이다.
@@ -708,4 +709,23 @@ async function start() {
   ]);
 }
 
+// --- sandbox 보드 HTML ---
+// sandbox 블록은 assets.bytes를 못 써서 client가 보드 코드 조각을 모두 읽어 board_html로 한 번만 낸다.
+// 값이 바뀔 때마다 프레임이 다시 시작하므로 client 수명 동안 한 번만 낸다. 조각 id 목록은
+// 로더(scripts/pack.mjs)가 globalThis.MOODBOARD_BOARD_PARTS에 넣는다.
+let boardHtmlStarted = false;
+async function publishBoardHtml() {
+  if (boardHtmlStarted) return;
+  boardHtmlStarted = true;
+  let html;
+  try {
+    html = await loadBoardHtml(globalThis.MOODBOARD_BOARD_PARTS, p.assetBytes);
+  } catch (err) {
+    console.error('moodboard: 보드 코드를 읽지 못했습니다', err);
+    html = errorHtml(err?.message ?? String(err));
+  }
+  p.publish({ board_html: html });
+}
+
+publishBoardHtml();
 start().catch((err) => setNotice(err?.message ?? '보드를 읽지 못했어요'));

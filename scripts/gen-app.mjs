@@ -1,22 +1,28 @@
 // app/moodboard.json을 만든다. 썸네일 저장 항목 128개를 손으로 쓰지 않으려고 둔 스크립트다.
-// 사용: node scripts/gen-app.mjs [client 판] [board 판] [export 판]
-//   client는 자산 moodboard(dist/moodboard.upload.js), board는 moodboard-board(dist/board.html),
-//   export는 moodboard-export(dist/export.upload.js). 기본값 10 3 2. 올린 판과 맞춘다.
+// 사용: node scripts/gen-app.mjs [client 판] [보드 코드 조각 판] [export 판]   (npm run build 뒤에)
+//   client는 자산 moodboard(dist/moodboard.upload.js), 보드 코드 조각은 moodboard-board-js-1..N
+//   (dist/board-js-<i>.upload.js, 모든 조각이 같은 판), export는 moodboard-export(dist/export.upload.js).
+//   기본값 11 1 2. 올린 판과 맞춘다. 조각 수는 dist/assets.json에서 읽는다.
 
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { placeholderHtml } from '../src/boardhtml.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ASSET_ID = 'moodboard';
-const BOARD_ASSET = 'moodboard-board';
 const EXPORT_ASSET = 'moodboard-export'; // src/main.js의 EXPORT_ASSET과 같아야 한다.
-const [ASSET_VERSION, BOARD_VERSION, EXPORT_VERSION] = [10, 3, 2].map((d, i) => Number(process.argv[2 + i] ?? d));
+const [ASSET_VERSION, BOARD_JS_VERSION, EXPORT_VERSION] = [11, 1, 2].map((d, i) => Number(process.argv[2 + i] ?? d));
 const SHARDS = 128; // src/main.js와 src/board/board.js의 SHARDS와 같아야 한다.
 
-for (const v of [ASSET_VERSION, BOARD_VERSION, EXPORT_VERSION]) {
+for (const v of [ASSET_VERSION, BOARD_JS_VERSION, EXPORT_VERSION]) {
   if (!Number.isInteger(v) || v < 1) throw new Error('자산 판은 1 이상의 정수');
 }
+
+// 보드 코드 조각 id. client 로더가 같은 목록을 MOODBOARD_BOARD_PARTS로 갖는다(scripts/pack.mjs).
+const built = JSON.parse(readFileSync(join(ROOT, 'dist', 'assets.json'), 'utf8'));
+const BOARD_PARTS = built.filter((a) => a.group === 'board-js').sort((a, b) => a.part - b.part).map((a) => a.id);
+if (BOARD_PARTS.length === 0) throw new Error('dist/assets.json에 보드 코드 조각이 없습니다. npm run build를 먼저 하세요');
 
 const shardId = (i) => 'thumbs_' + String(i).padStart(3, '0');
 
@@ -141,6 +147,8 @@ const outputs = {
   sel_kind: null,
   sel_title: '',
   sel_note: null,
+  // sandbox 보드 HTML(src/boardhtml.js). client가 보드 코드 조각을 모두 읽은 뒤 한 번 낸다.
+  board_html: placeholderHtml,
   // 4차: 카드 이름과 메모
   sel_heading: '',
   sel_label: '',
@@ -324,8 +332,9 @@ const ui = {
       children: [
         // 보드는 sandbox가 그린다(src/board/board.js). 보통 iframe이라 wheel, 집기, 키보드, 붙여넣기를 받고
         // 쉘 테두리 없이 surface-solid 바탕에 놓인다. 주고받는 창 상태는 BOARD_STATE.
+        // sandbox는 assets.bytes를 쓰지 못해 HTML은 client가 만들어 board_html로 낸다(src/boardhtml.js).
         {
-          type: 'sandbox', asset: BOARD_ASSET, title: '무드보드: 끌어 옮기고, 두 손가락으로 이동, 집어서 확대',
+          type: 'sandbox', value: c('board_html'), title: '무드보드: 끌어 옮기고, 두 손가락으로 이동, 집어서 확대',
           state_keys: BOARD_STATE, storage_entries: storageIds,
         },
         side,
@@ -355,7 +364,7 @@ const app = {
   },
   assets: [
     { id: ASSET_ID, version: ASSET_VERSION },
-    { id: BOARD_ASSET, version: BOARD_VERSION },
+    ...BOARD_PARTS.map((id) => ({ id, version: BOARD_JS_VERSION })),
     { id: EXPORT_ASSET, version: EXPORT_VERSION },
   ],
   storage: { entries: [boardsEntry, ...thumbEntries] },
@@ -383,5 +392,5 @@ const app = {
 
 mkdirSync(join(ROOT, 'app'), { recursive: true });
 writeFileSync(join(ROOT, 'app', 'moodboard.json'), JSON.stringify(app, null, 2) + '\n');
-console.log(`app/moodboard.json: 자산 ${ASSET_ID}@${ASSET_VERSION}, ${BOARD_ASSET}@${BOARD_VERSION}, `
+console.log(`app/moodboard.json: 자산 ${ASSET_ID}@${ASSET_VERSION}, ${BOARD_PARTS.map((id) => `${id}@${BOARD_JS_VERSION}`).join(', ')}, `
   + `${EXPORT_ASSET}@${EXPORT_VERSION}, 저장 항목 ${storageIds.length}개`);
