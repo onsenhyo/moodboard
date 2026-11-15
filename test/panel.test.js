@@ -72,3 +72,30 @@ test('panelOutputs: https가 아닌 주소는 열기를 끈다', () => {
   const l = panelOutputs({ ...base, kind: 'link', url: 'http://example.com' });
   assert.equal(l.sel_openable, false);
 });
+
+test('panelOutputs: 묶음 출력 키는 EMPTY_PANEL에도 있다', () => {
+  assert.equal(EMPTY_PANEL.group_selected, null);
+  assert.equal(EMPTY_PANEL.has_group_selected, false);
+  assert.deepEqual(Object.keys(panelOutputs(null)).sort(), Object.keys(EMPTY_PANEL).sort());
+});
+
+test('panelOutputs: 묶음을 고르면 이름과 카드 수, 카드 쪽 출력은 비어 있다', () => {
+  const o = panelOutputs({ group: { id: 'g1', name: '여름', count: 3 } });
+  assert.deepEqual(o.group_selected, { id: 'g1', name: '여름', count: 3 });
+  assert.equal(o.has_group_selected, true);
+  assert.deepEqual(Object.keys(o).sort(), Object.keys(EMPTY_PANEL).sort());
+  for (const k of Object.keys(EMPTY_PANEL)) {
+    if (k === 'group_selected' || k === 'has_group_selected' || k === 'sel_none') continue;
+    assert.deepEqual(o[k], EMPTY_PANEL[k], k);
+  }
+  // 묶음을 골랐으니 "카드를 누르면" 안내는 끈다
+  assert.equal(o.sel_none, false);
+  assert.equal(o.sel_has, false);
+});
+
+test('panelOutputs: 카드를 고르면 묶음 출력은 비어 있다', () => {
+  const o = panelOutputs({ ...base, kind: 'text', text: 'a' });
+  assert.equal(o.group_selected, null);
+  assert.equal(o.has_group_selected, false);
+  assert.deepEqual(Object.keys(o).sort(), Object.keys(EMPTY_PANEL).sort());
+});

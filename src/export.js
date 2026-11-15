@@ -11,6 +11,8 @@
 //   카드마다 <script type="text/plain" data-thumb="id">base64, 영상마다 data-video 블록, 뷰어 스크립트.
 // 외부 요청은 없다. 원본 링크는 뷰어가 target=_blank rel=noopener 앵커로 만든다.
 
+import { liveGroups, effectiveGroupId } from './model.js';
+
 export const WARN_BYTES = 50_000_000;
 export const BLOCK_BYTES = 95_000_000;
 export const OVERHEAD_BYTES = 200_000;
@@ -92,8 +94,11 @@ export function bytesToBase64(bytes) {
 }
 
 // 뷰어에 넘길 카드. 원본 키와 저장 시각은 빼고, 수동 배치 자리와 색은 그대로 둔다.
-function viewerCard(c, embedded) {
+// groupId는 살아 있는 묶음을 가리킬 때만 남긴다.
+function viewerCard(board, c, embedded) {
   const out = { id: c.id, kind: c.kind, title: c.title ?? '', color: c.color, manual: c.manual, hasThumb: !!c.hasThumb };
+  const groupId = effectiveGroupId(board, c);
+  if (groupId) out.groupId = groupId;
   if (c.url) out.url = c.url;
   if (typeof c.text === 'string') out.text = c.text;
   if (c.note) out.note = c.note;
@@ -101,31 +106,46 @@ function viewerCard(c, embedded) {
   return out;
 }
 
+// 뷰어에 넘길 묶음. 지운 묶음은 빼고, 접힘은 그대로 내보낸다.
+const viewerGroup = (g) => ({
+  id: g.id, name: g.name ?? '', rect: { x: g.rect.x, y: g.rect.y, w: g.rect.w, h: g.rect.h }, collapsed: !!g.collapsed,
+});
+
+// 뼈대만 둔다. 색과 글꼴은 뷰어가 THEMES에서 골라 <style id="theme">로 넣는다(prefers-color-scheme).
+// 둥근 모서리는 쓰지 않는다.
 const CSS = `
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;overflow:hidden;background:#1d1d1f;color:#eee;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
-#bar{position:fixed;top:0;left:0;right:0;height:44px;display:flex;align-items:center;gap:6px;padding:0 10px;background:#2a2a2d;border-bottom:1px solid #3a3a3e;z-index:2}
+html,body{margin:0;height:100%;overflow:hidden;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+@media (prefers-color-scheme: dark){html,body{background:#141416;color:#e9e6df}}
+#bar{position:fixed;top:0;left:0;right:0;height:44px;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid transparent;z-index:2}
 #bar h1{font-size:15px;font-weight:600;margin:0 auto 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#bar button{font:inherit;color:#eee;background:#3a3a3e;border:1px solid #4a4a4f;border-radius:6px;padding:4px 10px;cursor:pointer}
-#bar button[aria-pressed=true]{background:#2f6fde;border-color:#2f6fde}
+#bar button{font:inherit;border:1px solid transparent;padding:4px 10px;cursor:pointer}
 #stage{position:fixed;top:44px;left:0;right:0;bottom:0;overflow:hidden;cursor:grab;touch-action:none}
 #stage.panning{cursor:grabbing}
 #world{position:absolute;left:0;top:0;transform-origin:0 0}
-.card{position:absolute;overflow:hidden;border-radius:6px;background:#444;box-shadow:0 1px 4px rgba(0,0,0,.5);cursor:pointer;user-select:none}
-.card.anim{transition:left .3s cubic-bezier(.33,1,.68,1),top .3s cubic-bezier(.33,1,.68,1),width .3s cubic-bezier(.33,1,.68,1),height .3s cubic-bezier(.33,1,.68,1)}
+.group{position:absolute;border:1px solid transparent}
+.group .label{position:absolute;left:10px;top:-1px;transform:translateY(-100%);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.group .gdot{flex:none;width:7px;height:7px;clip-path:circle(50%)}
+.group.collapsed .label{position:static;transform:none;height:100%;padding:0 10px}
+.card{position:absolute;overflow:hidden;cursor:pointer;user-select:none}
+.card.anim,.group.anim{transition:left .3s cubic-bezier(.33,1,.68,1),top .3s cubic-bezier(.33,1,.68,1),width .3s cubic-bezier(.33,1,.68,1),height .3s cubic-bezier(.33,1,.68,1)}
+.card.hidden,.group.hidden{display:none}
+.card .pic{position:absolute;inset:0;overflow:hidden}
 .card img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
-.card .ph{padding:30px 10px 10px;font-size:13px;color:#ddd;white-space:pre-wrap;word-break:break-all}
-.card.text{background:#f3efe6;color:#222}
-.card.text .ph{color:#222;white-space:pre-wrap;word-break:break-word;font-size:14px}
-.card .dot{position:absolute;right:8px;bottom:8px;width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.2)}
-.card .badge{position:absolute;left:6px;top:6px;padding:1px 6px;border-radius:4px;background:rgba(0,0,0,.6);color:#fff;font-size:12px}
-.card .note{position:absolute;left:0;right:0;bottom:0;padding:4px 8px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .cap{position:absolute;left:8px;bottom:5px;white-space:nowrap}
+.card .ph{position:absolute;inset:0;padding:14px;white-space:pre-wrap;word-break:break-word;overflow:hidden}
+.card .ph b{display:block;margin-bottom:4px}
+.card.link .ph,.card.placeholder .ph{padding-top:34px}
+.card .accent{position:absolute;left:0;top:0;bottom:0}
+.card .tdot{position:absolute;right:8px;bottom:8px;width:10px;height:10px;clip-path:circle(50%)}
+.card .badge{position:absolute;padding:1px 5px;line-height:1.3}
+.card .note{position:absolute;left:0;right:0;bottom:0;padding:4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #lb{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:3;padding:24px}
 #lb.open{display:flex}
 #lb .box{max-width:min(1100px,100%);max-height:100%;display:flex;flex-direction:column;gap:10px;align-items:center}
-#lb img,#lb video{width:min(1100px,calc(100vw - 48px));height:calc(100vh - 160px);object-fit:contain;border-radius:4px}
-#lb .txt{background:#f3efe6;color:#222;padding:20px;border-radius:6px;white-space:pre-wrap;word-break:break-word;max-height:calc(100vh - 160px);overflow:auto;min-width:min(480px,100%)}
-#lb .meta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center}
+#lb img,#lb video{width:min(1100px,calc(100vw - 48px));height:calc(100vh - 160px);object-fit:contain}
+#lb .txt{padding:20px;white-space:pre-wrap;word-break:break-word;max-height:calc(100vh - 160px);overflow:auto;min-width:min(480px,100%)}
+#lb .meta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center;color:#fff}
 #lb .title{font-weight:600}
 #lb a{color:#8ab4ff}
 #lb .close{position:fixed;top:12px;right:16px;font:inherit;font-size:20px;color:#fff;background:none;border:0;cursor:pointer}
@@ -177,7 +197,11 @@ export async function* buildExportChunks(board, plan, readers) {
   const embedded = new Set(videoData.keys());
   const pack = createPacker();
 
-  const data = { name: board?.name ?? '', cards: cards.map((c) => viewerCard(c, embedded)) };
+  const data = {
+    name: board?.name ?? '',
+    groups: liveGroups(board).filter((g) => g.rect).map(viewerGroup),
+    cards: cards.map((c) => viewerCard(board, c, embedded)),
+  };
   yield* pack.add(head(board));
   yield* pack.add(`<script type="application/json" id="board">${jsonForScript(data)}</script>\n`);
 

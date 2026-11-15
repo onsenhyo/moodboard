@@ -22,12 +22,25 @@ export const EMPTY_PANEL = Object.freeze({
   sel_text: '',
   sel_color: '#9e9e9e',
   sel_openable: false,
+  group_selected: null, // {id, name, count}
+  has_group_selected: false,
 });
 
 const isHttps = (u) => typeof u === 'string' && /^https:\/\/\S+$/i.test(u);
 
+// sel: null(고른 것 없음) | {group:{id, name, count}}(묶음) | 카드 선택 객체.
+// 묶음을 고르면 카드 칸은 모두 비우고, "카드를 누르면" 안내(sel_none)도 끈다.
 export function panelOutputs(sel) {
   if (!sel) return { ...EMPTY_PANEL };
+  if (sel.group) {
+    const g = sel.group;
+    return {
+      ...EMPTY_PANEL,
+      sel_none: false,
+      group_selected: { id: g.id, name: g.name ?? '', count: Number.isFinite(g.count) ? g.count : 0 },
+      has_group_selected: true,
+    };
+  }
   const kind = sel.kind ?? null;
   const picture = kind === 'image' || kind === 'pinterest';
   const origImage = picture && sel.hasOrig && sel.origKey ? { blob: sel.origKey } : null;
@@ -56,5 +69,7 @@ export function panelOutputs(sel) {
     sel_text: kind === 'text' ? sel.text ?? '' : '',
     sel_color: sel.color ?? EMPTY_PANEL.sel_color,
     sel_openable: kind !== 'text' && kind !== 'image' && kind !== 'video' && isHttps(sel.url),
+    group_selected: null,
+    has_group_selected: false,
   };
 }

@@ -1,15 +1,63 @@
 // 내보낸 HTML 안에서 도는 읽기 전용 뷰어. 브라우저 전용이며 iife로 따로 번들해 HTML에 넣는다.
 // 정렬은 앱과 같은 sortedLayout(layout.js, color.js)과 sortCols를 쓴다.
 // 외부 요청은 하지 않는다. 썸네일과 영상은 페이지 안의 text/plain 블록에서 읽는다.
+// 모양은 앱 캔버스와 같은 THEMES 토큰으로 정하고, prefers-color-scheme으로 light/dark를 고른다.
+// 묶음 상자는 카드 아래에 그린다. 접힌 묶음은 제목줄만 보이고 그 카드는 수동 배치에서 숨긴다.
+// 색 정렬 모드에서는 묶음을 숨기고 모든 카드를 보인다.
 
-import { sortedLayout, SORT_CELL, SORT_GAP } from '../layout.js';
+import { sortedLayout, SORT_CELL, SORT_GAP, GROUP_TITLE_PX } from '../layout.js';
 import { sortCols, zoomAt, fitView } from '../interaction.js';
+import { THEMES, themeName, groupDotColor } from '../theme.js';
 
 const BADGE = { youtube: '▶', video: '🎞', pinterest: '📌', text: '✎', link: '🔗' };
 const LINK_KINDS = new Set(['youtube', 'pinterest', 'link']);
 const CLICK_PX = 4;
 const ZOOM_STEP = 1.25;
 const ANIM_MS = 300;
+const CAPTION = { image: 'image', video: 'video', youtube: 'youtube', pinterest: 'pinterest' };
+const HEX = /^#[0-9a-f]{6}$/i;
+const LABEL_ROOM = 24; // 맞춤 때 상자 위 이름 자리
+
+const shadowCss = (list) => (list ?? []).map((s) => `0 ${s.y}px ${s.blur}px ${s.color}`).join(',') || 'none';
+
+// THEMES 토큰을 CSS로 옮긴다. 둥근 모서리는 쓰지 않는다.
+function themeCss(t) {
+  const pad = t.mat ? t.mat.pad : 0;
+  const bottom = t.mat ? t.mat.bottom : 0;
+  const grid = t.grid
+    ? `background-image:radial-gradient(${t.grid.dot} ${t.grid.r}px,transparent ${t.grid.r}px);background-size:${t.grid.step}px ${t.grid.step}px;`
+    : 'background-image:none;';
+  const barBg = t.matBg ?? t.textBg;
+  return [
+    `html,body{background:${t.bg};color:${t.textInk}}`,
+    `#stage{background-color:${t.bg};${grid}}`,
+    `#bar{background:${barBg};color:${t.textInk};border-bottom-color:${t.groupLine}}`,
+    `#bar h1{font:${t.linkTitleFont}}`,
+    `#bar button{font:${t.uiFont};color:${t.textInk};background:${t.textBg};border-color:${t.groupLine}}`,
+    `#bar button[aria-pressed=true]{background:${t.selectLine};border-color:${t.selectLine};color:${t.bg}}`,
+    `.group{background:${t.groupFill};border-color:${t.groupLine}}`,
+    `.group .label{font:${t.groupLabelFont};color:${t.groupLabelInk};letter-spacing:${t.groupLabelSpacing};`
+      + `text-transform:${t.groupLabelUpper ? 'uppercase' : 'none'};padding-bottom:${t.groupLabelGap}px}`,
+    `.group.collapsed .label{padding-bottom:0}`,
+    `.group .gdot{display:${t.groupDot ? 'block' : 'none'}}`,
+    `.card{box-shadow:${shadowCss(t.shadow)};background:${t.placeholderBg}}`,
+    `.card.photo{background:${t.matBg ?? t.loadingBg}}`,
+    `.card.photo .pic{inset:${pad}px ${pad}px ${bottom}px ${pad}px;background:${t.loadingBg}}`,
+    `.card .cap{display:${t.captionColor ? 'block' : 'none'};font:${t.captionFont};color:${t.captionColor ?? 'inherit'}}`,
+    `.card .badge{left:${pad + 6}px;top:${pad + 6}px;background:${t.badgeBg};color:${t.badgeInk};font:${t.badgeFont}}`,
+    `.card.text{background:${t.textBg};color:${t.textInk}}`,
+    `.card.text .ph{font:${t.textFont};line-height:1.35;padding-left:${14 + (t.textAccentBar ? t.textAccentWidth : 0)}px}`,
+    `.card .accent{display:${t.textAccentBar ? 'block' : 'none'};width:${t.textAccentWidth}px}`,
+    `.card .tdot{display:${t.textAccentBar ? 'none' : 'block'}}`,
+    `.card.link{background:${t.linkBg};color:${t.linkInk}}`,
+    `.card.link .ph{font:${t.linkUrlFont};color:${t.linkMuted}}`,
+    `.card.link .ph b{font:${t.linkTitleFont};color:${t.linkInk}}`,
+    `.card.placeholder .ph{font:${t.placeholderFont};color:${t.placeholderInk}}`,
+    `.card .note{background:${t.noteBg};color:${t.noteInk};font:${t.noteFont}}`,
+    `.card.photo .note{left:${pad}px;right:${pad}px;bottom:${bottom}px}`,
+    `#lb .txt{background:${t.textBg};color:${t.textInk};font:${t.textFont}}`,
+  ].join('\n');
+}
 
 const el = (tag, props = {}, ...children) => {
   const n = document.createElement(tag);
@@ -50,6 +98,7 @@ function b64ToBlobUrl(b64, mime) {
 function start() {
   const data = JSON.parse(document.getElementById('board')?.textContent || '{"name":"","cards":[]}');
   const cards = Array.isArray(data.cards) ? data.cards : [];
+  const groups = (Array.isArray(data.groups) ? data.groups : []).filter((g) => g && g.id && g.rect);
   const thumbs = readBlocks('data-thumb');
   const videos = readBlocks('data-video');
   const videoUrls = new Map();
@@ -61,6 +110,19 @@ function start() {
   };
 
   document.title = data.name || document.title;
+
+  // --- 테마 ---
+  const themeStyle = el('style', { id: 'theme' });
+  document.head.append(themeStyle);
+  const mq = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
+  const applyTheme = () => {
+    const name = themeName(!!mq?.matches);
+    document.documentElement.setAttribute('data-theme', name);
+    themeStyle.textContent = themeCss(THEMES[name]);
+  };
+  applyTheme();
+  if (mq?.addEventListener) mq.addEventListener('change', applyTheme);
+  else if (mq?.addListener) mq.addListener(applyTheme);
 
   // --- 화면 뼈대 ---
   const btn = (label, title) => el('button', { type: 'button', title: title || label, text: label });
@@ -75,18 +137,49 @@ function start() {
   const lb = el('div', { id: 'lb', role: 'dialog', 'aria-modal': 'true' });
   document.body.append(bar, stage, lb);
 
+  // --- 묶음 상자(카드 아래) ---
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  const membersOf = (g) => cards.filter((c) => c.groupId === g.id);
+  const groupNodes = new Map();
+  for (const g of groups) {
+    const members = membersOf(g);
+    const label = g.collapsed ? `▸ ${g.name} · ${members.length}장` : g.name;
+    const n = el('div', { class: `group${g.collapsed ? ' collapsed' : ''}`, 'data-group': g.id, title: g.name },
+      el('div', { class: 'label' },
+        el('span', { class: 'gdot', style: `background:${groupDotColor(members)}` }),
+        el('span', { text: label })));
+    const h = g.collapsed ? Math.min(g.rect.h, GROUP_TITLE_PX) : g.rect.h;
+    Object.assign(n.style, { left: `${g.rect.x}px`, top: `${g.rect.y}px`, width: `${g.rect.w}px`, height: `${h}px` });
+    world.append(n);
+    groupNodes.set(g.id, n);
+  }
+  const hiddenInManual = (c) => !!(c.groupId && groupById.get(c.groupId)?.collapsed);
+
   // --- 카드 ---
   const manual = new Map(cards.map((c) => [c.id, c.manual ?? { x: 0, y: 0, w: 240, h: 180 }]));
   const sorted = sortedLayout(cards, { cols: sortCols(cards.length), cell: SORT_CELL, gap: SORT_GAP });
   const nodes = new Map();
   for (const c of cards) {
-    const n = el('div', { class: `card ${c.kind === 'text' ? 'text' : ''}`, 'data-id': c.id, title: c.title || '' });
     const src = c.hasThumb ? thumbUrl(c.id) : null;
-    if (src) n.append(el('img', { src, alt: c.title || '', draggable: 'false' }));
-    else if (c.kind === 'text') n.append(el('div', { class: 'ph', text: c.text ?? '' }));
-    else n.append(el('div', { class: 'ph', text: c.url ? `${hostOf(c.url)}\n${c.url}` : (c.title || '') }));
-    if (c.kind === 'text') n.append(el('span', { class: 'dot', style: `background:${/^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#9e9e9e'}` }));
-    if (BADGE[c.kind]) n.append(el('span', { class: 'badge', text: BADGE[c.kind] }));
+    const color = HEX.test(c.color) ? c.color : '#9e9e9e';
+    const type = src ? 'photo' : c.kind === 'text' ? 'text' : LINK_KINDS.has(c.kind) ? 'link' : 'placeholder';
+    const n = el('div', { class: `card ${type}`, 'data-id': c.id, title: c.title || '' });
+    if (type === 'photo') {
+      n.append(el('div', { class: 'pic' }, el('img', { src, alt: c.title || '', draggable: 'false' })));
+      if (CAPTION[c.kind]) n.append(el('span', { class: 'cap', text: CAPTION[c.kind] }));
+    } else if (type === 'text') {
+      n.append(el('span', { class: 'accent', style: `background:${color}` }));
+      n.append(el('div', { class: 'ph', text: c.text ?? '' }));
+      n.append(el('span', { class: 'tdot', style: `background:${color}` }));
+    } else if (type === 'link') {
+      const ph = el('div', { class: 'ph' }, el('b', { text: c.title || hostOf(c.url) }));
+      ph.append(c.url ? `${hostOf(c.url)}\n${c.url}` : '');
+      n.append(ph);
+    } else {
+      n.append(el('div', { class: 'ph', text: c.title || '' }));
+    }
+    // 글 카드는 색 띠/점으로 충분하므로 배지를 달지 않는다(목업과 같음).
+    if (BADGE[c.kind] && type !== 'text') n.append(el('span', { class: 'badge', text: BADGE[c.kind] }));
     if (c.note) n.append(el('div', { class: 'note', text: c.note }));
     world.append(n);
     nodes.set(c.id, n);
@@ -99,9 +192,13 @@ function start() {
 
   function place(animate) {
     const r = rects();
-    for (const [id, n] of nodes) {
-      const rect = r.get(id);
-      if (!rect) continue;
+    const sortedMode = mode === 'sorted';
+    for (const n of groupNodes.values()) n.classList.toggle('hidden', sortedMode);
+    for (const c of cards) {
+      const n = nodes.get(c.id);
+      const rect = r.get(c.id);
+      if (!n || !rect) continue;
+      n.classList.toggle('hidden', !sortedMode && hiddenInManual(c));
       n.classList.toggle('anim', animate);
       Object.assign(n.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.w}px`, height: `${rect.h}px` });
     }
@@ -110,8 +207,19 @@ function start() {
   function applyView() {
     world.style.transform = `scale(${view.scale}) translate(${-view.x}px, ${-view.y}px)`;
   }
+  // 맞춤은 보이는 것만 본다. 수동 배치에서는 묶음 상자와 그 위 이름 자리까지 넣는다.
+  function visibleRects() {
+    const r = rects();
+    if (mode === 'sorted') return [...r.values()];
+    const out = cards.filter((c) => !hiddenInManual(c)).map((c) => r.get(c.id)).filter(Boolean);
+    for (const g of groups) {
+      const h = g.collapsed ? Math.min(g.rect.h, GROUP_TITLE_PX) : g.rect.h;
+      out.push({ x: g.rect.x, y: g.rect.y - (g.collapsed ? 0 : LABEL_ROOM), w: g.rect.w, h: h + (g.collapsed ? 0 : LABEL_ROOM) });
+    }
+    return out;
+  }
   function fit() {
-    view = fitView([...rects().values()], size());
+    view = fitView(visibleRects(), size());
     applyView();
   }
   function setMode(next) {
