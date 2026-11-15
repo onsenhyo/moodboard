@@ -242,7 +242,7 @@ const detail = {
     // 메모: 여러 줄이라 Enter는 줄바꿈이다. 입력칸을 떠날 때(blur) 저장한다.
     when('has_memo_input', {
       type: 'input', label: '메모', label_position: 'top', multiline: true, rows: 3,
-      placeholder: '메모 (500자까지)', value: c('sel_memo'), commit: 'blur', on_change: c('set_card_memo'),
+      placeholder: '메모 (500자까지)', value: c('sel_memo'), commit: 'debounce', on_change: c('set_card_memo'),
     }),
     when('sel_has_note', { type: 'text', style: 'meta', value: c('sel_note') }),
     // 이미지·핀터레스트: 원본이 이 PC에 있으면 blob, 없으면 썸네일을 미리보기 canvas에 그린다(image는 data: 주소를 받지 않는다).
