@@ -11,8 +11,11 @@
 //
 // 디코드: WebCodecs ImageDecoder가 있으면 프레임을 하나씩(지금 프레임의 다음 것만) 디코드해 ImageBitmap으로 모은다.
 // 모은 프레임이 budgetBytes(가로×세로×4로 잰다)를 넘으면 그 카드는 지금 프레임과 다음 프레임만 남긴다.
-// ImageDecoder가 없으면 blob 주소의 <img>를 보이지 않게 문서에 붙여 두고 그대로 그린다. HTML 표준은 drawImage가
-// 움직이는 그림의 첫 프레임을 쓰라고 해서 Chrome에서는 멈춘 채로 보인다(headless 확인). WebKit은 아직 확인하지 못했다.
+// ImageDecoder가 없거나 GIF를 못 풀면(WKWebView) src/gifdecode.js로 직접 푼다. 같은 방식으로 프레임을 하나씩 겹쳐
+// RGBA로 받고 ImageBitmap(없으면 canvas)으로 만들어 같은 캐시와 예산에 넣는다.
+// 그것도 실패하면 blob 주소의 <img>를 그린다. drawImage는 첫 프레임만 쓰므로 멈춘 채로 보인다.
+
+import { openGif } from './gifdecode.js';
 
 export const ANIM_FPS = 30;
 export const ANIM_FRAME_MS = 1000 / ANIM_FPS;
@@ -85,6 +88,7 @@ export function createGifPlayer({
   function closeEntry(e) {
     e.dead = true;
     for (const f of e.frames ?? []) f?.bmp?.close?.();
+    e.gif = null;
     used -= e.bytes ?? 0;
     e.bytes = 0;
     try { e.decoder?.close(); } catch { /* 이미 닫힘 */ }
@@ -115,7 +119,19 @@ export function createGifPlayer({
         if (e.dead) return;
       }
     }
-    // 대체: <img>. 문서에 붙어 있어야 WebKit이 움직이는 경우가 있어 보이지 않는 상자에 둔다.
+    // 대체 1: 직접 푼다.
+    try {
+      const gif = openGif(bytes);
+      e.gif = gif;
+      e.count = gif.count;
+      e.frames = new Array(e.count).fill(null);
+      e.state = 'ready';
+      decodeFrame(e, 0);
+      return;
+    } catch {
+      e.gif = null;
+    }
+    // 대체 2: <img>. 문서에 붙어 있어야 WebKit이 움직이는 경우가 있어 보이지 않는 상자에 둔다.
     const url = URL.createObjectURL(new Blob([bytes], { type: 'image/gif' }));
     const img = new Image();
     img.decoding = 'async';
@@ -128,37 +144,58 @@ export function createGifPlayer({
     hiddenHost().append(img);
   }
 
+  // 프레임 i를 캐시에 넣는다. 예산을 넘으면 이 카드는 지금 프레임과 방금 것만 남긴다(다음 바퀴에 다시 디코드).
+  function store(e, i, bmp, dur) {
+    const size = bmp.width * bmp.height * 4;
+    e.frames[i] = { bmp, dur, size };
+    e.bytes = (e.bytes ?? 0) + size;
+    used += size;
+    if (used > budgetBytes) {
+      e.frames.forEach((f, j) => {
+        if (!f || j === i || j === e.player.cur) return;
+        f.bmp.close?.();
+        e.bytes -= f.size;
+        used -= f.size;
+        e.frames[j] = null;
+      });
+    }
+    if (i === 0) onFrame();
+  }
+
   function decodeFrame(e, i) {
     if (e.dead || e.decoding || e.frames[i]) return;
     e.decoding = true;
-    e.decoder.decode({ frameIndex: i })
+    const job = e.gif ? decodeJs(e, i) : e.decoder.decode({ frameIndex: i })
       .then(async ({ image }) => {
         try {
           if (e.dead) return;
           const dur = frameDelay((image.duration ?? 0) / 1000); // VideoFrame.duration은 µs
           const bmp = await createImageBitmap(image);
           if (e.dead) { bmp.close(); return; }
-          const size = bmp.width * bmp.height * 4;
-          e.frames[i] = { bmp, dur, size };
-          e.bytes = (e.bytes ?? 0) + size;
-          used += size;
-          // 예산을 넘으면 이 카드는 지금 프레임과 방금 것만 남긴다(다음 바퀴에 다시 디코드).
-          if (used > budgetBytes) {
-            e.frames.forEach((f, j) => {
-              if (!f || j === i || j === e.player.cur) return;
-              f.bmp.close();
-              e.bytes -= f.size;
-              used -= f.size;
-              e.frames[j] = null;
-            });
-          }
-          if (i === 0) onFrame();
+          store(e, i, bmp, dur);
         } finally {
           image.close();
         }
-      })
+      });
+    job
       .catch(() => { if (i === 0) e.state = 'failed'; })
       .finally(() => { e.decoding = false; });
+  }
+
+  async function decodeJs(e, i) {
+    const { gif } = e;
+    const data = new ImageData(gif.frameAt(i), gif.width, gif.height);
+    let bmp;
+    if (typeof createImageBitmap === 'function') {
+      bmp = await createImageBitmap(data);
+    } else {
+      bmp = document.createElement('canvas');
+      bmp.width = gif.width;
+      bmp.height = gif.height;
+      bmp.getContext('2d').putImageData(data, 0, 0);
+    }
+    if (e.dead) { bmp.close?.(); return; }
+    store(e, i, bmp, frameDelay(gif.delays[i]));
   }
 
   function frame(card, t) {

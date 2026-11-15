@@ -68,3 +68,36 @@ test('createGifPlayer: 처음 frame에서만 읽고(lazy), retain 밖의 카드�
   player.frame({ id: 'a' }, 4);
   assert.deepEqual(loads, ['a', 'a', 'a']); // 놓은 카드는 다시 읽는다
 });
+
+test('createGifPlayer: ImageDecoder가 없으면 직접 풀어 프레임을 넘긴다', async () => {
+  // 2×1, 두 프레임(빨강, 파랑), 각 50cs. LZW는 clear, 색, clear, 색, eoi(3비트).
+  const frameBytes = (c) => {
+    const codes = [4, c, 4, c, 5];
+    let acc = 0, n = 0; const out = [];
+    for (const k of codes) { acc |= k << n; n += 3; while (n >= 8) { out.push(acc & 255); acc >>= 8; n -= 8; } }
+    if (n) out.push(acc & 255);
+    return [0x21, 0xf9, 4, 0, 50, 0, 0, 0, 0x2c, 0, 0, 0, 0, 2, 0, 1, 0, 0, 2, out.length, ...out, 0];
+  };
+  const gif = Buffer.from([...Buffer.from('GIF89a'), 2, 0, 1, 0, 0x80, 0, 0, 255, 0, 0, 0, 0, 255,
+    ...frameBytes(0), ...frameBytes(1), 0x3b]);
+  const saved = { ImageData: globalThis.ImageData, createImageBitmap: globalThis.createImageBitmap };
+  globalThis.ImageData = class { constructor(data, width, height) { Object.assign(this, { data, width, height }); } };
+  globalThis.createImageBitmap = async (d) => ({ width: d.width, height: d.height, rgb: Array.from(d.data.subarray(0, 3)), close() {} });
+  try {
+    let frames = 0;
+    const player = createGifPlayer({ load: async () => gif.toString('base64'), useDecoder: false, onFrame: () => frames++ });
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    assert.equal(player.frame({ id: 'g' }, 0), null);
+    await tick(); await tick();
+    assert.equal(frames, 1);
+    assert.deepEqual(player.frame({ id: 'g' }, 0).rgb, [255, 0, 0]);
+    await tick(); await tick();
+    assert.deepEqual(player.frame({ id: 'g' }, 499).rgb, [255, 0, 0]);
+    assert.deepEqual(player.frame({ id: 'g' }, 500).rgb, [0, 0, 255]);
+    assert.equal(player.bytes, 2 * 2 * 1 * 4);
+    player.retain(new Set());
+    assert.equal(player.bytes, 0);
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+});
