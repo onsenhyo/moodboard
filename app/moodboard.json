@@ -70,7 +70,9 @@
     "mode": "manual",
     "cmd": null,
     "paste_inbox": null,
-    "crop_target": null
+    "crop_target": null,
+    "drop_inbox": null,
+    "drop_ack": null
   },
   "assets": [
     {
@@ -2307,7 +2309,9 @@
       "mode",
       "cmd",
       "paste_inbox",
-      "crop_target"
+      "crop_target",
+      "drop_inbox",
+      "drop_ack"
     ],
     "storage_entries": [
       "boards",
@@ -2690,7 +2694,9 @@
               "mode",
               "cmd",
               "paste_inbox",
-              "crop_target"
+              "crop_target",
+              "drop_inbox",
+              "drop_ack"
             ],
             "storage_entries": [
               "boards",

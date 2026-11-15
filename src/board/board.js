@@ -4,8 +4,9 @@
 // - storage boards, thumbs_000..127을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).
 // - 창 상태
 //   읽기: board(지금 보드 id, client가 씀), mode('manual'|'sorted'), cmd({op, n}, n이 바뀔 때만 실행), selected,
-//         crop_target({id, n}, n이 바뀌면 그 카드의 자르기 화면을 연다. 사진 카드를 두 번 눌러도 연다)
-//   쓰기: selected {kind, id}|null, view {cx, cy, scale}(200ms 모음), paste_inbox {text, n}
+//         crop_target({id, n}, n이 바뀌면 그 카드의 자르기 화면을 연다. 사진 카드를 두 번 눌러도 연다), drop_ack
+//   쓰기: selected {kind, id}|null, view {cx, cy, scale}(200ms 모음), paste_inbox {text, n},
+//         drop_inbox(끌어 놓은 파일 조각, drop.js)
 // - 보드 편집은 패치로 쌓아(patches.js) 새로 읽은 값에 적용해 쓴다. 손을 뗄 때와 키로 지울 때 바로 저장하고,
 //   창을 닫거나 숨길 때(pagehide, visibilitychange) 남은 패치를 바로 쓴다.
 // - 입력: 포인터(interaction.js), wheel(이동), ctrl+wheel과 gesture*(확대), Delete/Backspace, Esc, 붙여넣기.
@@ -23,6 +24,7 @@ import { createSaver, retryRead } from '../startup.js';
 import { liveGroups } from '../model.js';
 import { normSelected, deleteCardPatches, deleteGroupPatches } from '../selection.js';
 import { wheelView, gestureView, stateFromView, viewFromState, createCmdTracker, keyEffect } from './input.js';
+import { installDrop } from './drop.js';
 
 const SHARDS = 128;
 const SAVE_RETRY_MS = 3000;
@@ -448,6 +450,14 @@ document.addEventListener('paste', (e) => {
   pasteBox.value = '';
   if (!text.trim()) return;
   k.setState('paste_inbox', { text, n: Date.now() });
+});
+
+// --- 끌어 놓기 (Finder에서 보드 위로, drop.js) ---
+
+installDrop({
+  k, canvas, showToast,
+  getView: () => ui.view,
+  accent: () => THEMES[themeKey].selectLine ?? '#6f569a',
 });
 
 // --- 창 상태 ---
