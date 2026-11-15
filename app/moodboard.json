@@ -65,7 +65,7 @@
   "assets": [
     {
       "id": "moodboard",
-      "version": 5
+      "version": 6
     }
   ],
   "storage": {
@@ -175,6 +175,54 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "groupId": {
+                          "type": "string"
+                        },
+                        "deleted": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "rect": {
+                          "type": "object",
+                          "properties": {
+                            "x": {
+                              "type": "number"
+                            },
+                            "y": {
+                              "type": "number"
+                            },
+                            "w": {
+                              "type": "number"
+                            },
+                            "h": {
+                              "type": "number"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "collapsed": {
+                          "type": "boolean"
+                        },
+                        "updatedAt": {
+                          "type": "number"
                         },
                         "deleted": {
                           "type": "boolean"
@@ -1999,7 +2047,7 @@
     "runtime": "javascript",
     "entry": {
       "id": "moodboard",
-      "version": 5
+      "version": 6
     },
     "outputs": {
       "selected": {

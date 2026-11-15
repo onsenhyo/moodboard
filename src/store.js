@@ -51,10 +51,12 @@ function mergeById(local, remote, both) {
 export function mergeBoards(local, remote) {
   const l = normDoc(local);
   const r = normDoc(remote);
+  // 묶음도 카드와 같은 규칙으로 합친다. groups가 없는 옛 보드는 []로 채운다.
   const boards = mergeById(l.boards, r.boards, (lb, rb) => ({
     ...pick(lb, rb),
     cards: mergeById(lb.cards ?? [], rb.cards ?? [], pick),
-  }));
+    groups: mergeById(lb.groups ?? [], rb.groups ?? [], pick),
+  })).map((b) => (Array.isArray(b.groups) ? b : { ...b, groups: [] }));
   return structuredClone({ ...r, ...l, version: 1, boards });
 }
 
@@ -65,7 +67,12 @@ export function pruneTombstones(doc, now, maxAgeMs = TOMBSTONE_MAX_AGE_MS) {
     ...d,
     boards: d.boards
       .filter((b) => !expired(b))
-      .map((b) => (Array.isArray(b.cards) ? { ...b, cards: b.cards.filter((c) => !expired(c)) } : b)),
+      .map((b) => {
+        let out = b;
+        if (Array.isArray(b.cards)) out = { ...out, cards: b.cards.filter((c) => !expired(c)) };
+        if (Array.isArray(b.groups)) out = { ...out, groups: b.groups.filter((g) => !expired(g)) };
+        return out;
+      }),
   };
 }
 

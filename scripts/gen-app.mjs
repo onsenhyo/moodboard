@@ -41,6 +41,25 @@ const cardSchema = {
     note: optStr,
     url: optStr,
     text: optStr,
+    groupId: str, // 묶음 id. 묶음 밖이면 필드가 없다
+    deleted: bool,
+  },
+  additionalProperties: false,
+};
+
+const groupSchema = {
+  type: 'object',
+  required: ['id'],
+  properties: {
+    id: str,
+    name: str,
+    rect: {
+      type: 'object',
+      properties: { x: num, y: num, w: num, h: num },
+      additionalProperties: false,
+    },
+    collapsed: bool,
+    updatedAt: num,
     deleted: bool,
   },
   additionalProperties: false,
@@ -53,6 +72,7 @@ const boardSchema = {
     id: str,
     name: str,
     cards: { type: 'array', items: cardSchema },
+    groups: { type: 'array', items: groupSchema },
     updatedAt: num,
     deleted: bool,
   },

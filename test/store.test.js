@@ -104,6 +104,52 @@ test('병합: 입력을 바꾸지 않고, 비었거나 null인 문서를 받아 
   assert.deepEqual(mergeBoards(null, undefined), { version: 1, boards: [] });
 });
 
+// --- mergeBoards: groups ---
+
+const group = (id, updatedAt, extra = {}) => ({
+  id, name: id, rect: { x: 0, y: 0, w: 400, h: 300 }, collapsed: false, updatedAt, ...extra,
+});
+const groupsOf = (d, boardId) => d.boards.find((b) => b.id === boardId).groups;
+
+test('mergeBoards legacy doc: groups가 없는 보드끼리 합쳐도 groups는 []', () => {
+  const m = mergeBoards(doc(board('b1', [card('a', 1)])), doc(board('b1', [card('b', 1)])));
+  assert.deepEqual(groupsOf(m, 'b1'), []);
+  const onlyLocal = mergeBoards(doc(board('b2', [])), null);
+  assert.deepEqual(groupsOf(onlyLocal, 'b2'), []);
+  const onlyRemote = mergeBoards(null, doc(board('b3', [])));
+  assert.deepEqual(groupsOf(onlyRemote, 'b3'), []);
+});
+
+test('mergeBoards groups: 양쪽이 서로 다른 묶음을 더하면 둘 다 남는다', () => {
+  const l = doc(board('b1', [], 1, { groups: [group('gL', 5)] }));
+  const r = doc(board('b1', [], 1, { groups: [group('gR', 6)] }));
+  assert.deepEqual(groupsOf(mergeBoards(l, r), 'b1').map((g) => g.id), ['gL', 'gR']);
+});
+
+test('mergeBoards groups: 한쪽에만 groups가 있어도 합친다', () => {
+  const l = doc(board('b1', [], 1));
+  const r = doc(board('b1', [], 1, { groups: [group('g', 6)] }));
+  assert.deepEqual(groupsOf(mergeBoards(l, r), 'b1').map((g) => g.id), ['g']);
+  assert.deepEqual(groupsOf(mergeBoards(r, l), 'b1').map((g) => g.id), ['g']);
+});
+
+test('mergeBoards groups: 같은 묶음을 옮기면 updatedAt이 큰 쪽 rect가 남는다', () => {
+  const moved = { x: 50, y: 60, w: 400, h: 300 };
+  const l = doc(board('b1', [], 1, { groups: [group('g', 5)] }));
+  const r = doc(board('b1', [], 1, { groups: [group('g', 9, { rect: moved })] }));
+  assert.deepEqual(groupsOf(mergeBoards(l, r), 'b1')[0].rect, moved);
+  assert.deepEqual(groupsOf(mergeBoards(r, l), 'b1')[0].rect, moved);
+});
+
+test('mergeBoards groups: 한쪽이 지웠으면 묘비가 이긴다(같은 시각)', () => {
+  const l = doc(board('b1', [], 1, { groups: [group('g', 7)] }));
+  const r = doc(board('b1', [], 1, { groups: [group('g', 7, { deleted: true })] }));
+  assert.equal(groupsOf(mergeBoards(l, r), 'b1')[0].deleted, true);
+  assert.equal(groupsOf(mergeBoards(r, l), 'b1')[0].deleted, true);
+  const later = doc(board('b1', [], 1, { groups: [group('g', 8, { deleted: true })] }));
+  assert.equal(groupsOf(mergeBoards(l, later), 'b1')[0].deleted, true);
+});
+
 // --- pruneTombstones ---
 
 test('pruneTombstones: 30일 지난 묘비만 지운다', () => {
@@ -118,6 +164,24 @@ test('pruneTombstones: 30일 지난 묘비만 지운다', () => {
   assert.deepEqual(cardIds(p, 'b1'), ['fresh', 'live']);
   assert.equal(d.boards.length, 3, '입력은 그대로');
   assert.deepEqual(pruneTombstones(d, now, 0.5 * DAY).boards.map((b) => b.id), ['b1']);
+});
+
+test('pruneTombstones: 30일 지난 묶음 묘비를 지운다', () => {
+  const now = 100 * DAY;
+  const d = doc(
+    board('b1', [], 1, {
+      groups: [
+        group('old', now - 31 * DAY, { deleted: true }),
+        group('fresh', now - 29 * DAY, { deleted: true }),
+        group('live', 0),
+      ],
+    }),
+    board('legacy', []),
+  );
+  const p = pruneTombstones(d, now);
+  assert.deepEqual(groupsOf(p, 'b1').map((g) => g.id), ['fresh', 'live']);
+  assert.equal(d.boards[0].groups.length, 3, '입력은 그대로');
+  assert.equal('groups' in p.boards[1], false, 'groups가 없는 보드는 그대로');
 });
 
 // --- saveWithRetry ---
