@@ -1,7 +1,7 @@
 // sandbox 보드 진입점(보드 코드 조각 moodboard-board-js-1..N, client가 board_html로 싣는다. src/boardhtml.js). 보드 그리기와 조작을 맡는다.
 //
 // 브리지: window.kaleidoscope (kaleidoscope ui/src/blocks/sandbox-frame.ts)
-// - storage boards, thumbs_000..127, gifs_00..31(움직이는 GIF 원본, gifanim.js)을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).
+// - storage boards, thumbs_000..127, gifs_00..63(움직이는 GIF 원본, store.js createGifStore, gifanim.js)을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).
 // - 창 상태
 //   읽기: board(지금 보드 id, client가 씀), mode('manual'|'sorted'), cmd({op, n}, n이 바뀔 때만 실행), selected,
 //         crop_target({id, n}, n이 바뀌면 그 카드의 자르기 화면을 연다. 사진 카드를 두 번 눌러도 연다), drop_ack
@@ -21,7 +21,7 @@ import {
 import { pasteValue } from '../dropxfer.js';
 import { createRenderer } from '../render.js';
 import { THEMES, themeName, boardTheme } from '../theme.js';
-import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore, isConflict } from '../store.js';
+import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore, createGifStore, isConflict } from '../store.js';
 import { createGifPlayer } from '../gifanim.js';
 import { createDocEditor } from '../patches.js';
 import { createSaver, retryRead } from '../startup.js';
@@ -595,7 +595,7 @@ for (let i = 0; i < GIF_STORE.shards; i++) {
 
 // GIF 저장소는 썸네일과 따로 연다(보드가 늦게 뜨지 않게).
 async function startGifs() {
-  gifs = await createThumbStore(storage, { ...GIF_STORE });
+  gifs = await createGifStore(storage);
   for (const [id, value] of pendingGifs) gifs.reload(id, value);
   pendingGifs.clear();
   gifPlayer.invalidate();

@@ -5,7 +5,7 @@
 //   blobPut(key, fileId) -> Promise<void>,
 //   makeThumb(bytes, mime) -> Promise<{jpegB64, pixels, width?, height?}|null>,
 //   thumbs: ThumbStore,            // put(cardId, b64) -> {error:'full'} | undefined
-//   gifs: ThumbStore|null,         // 움직이는 GIF 원본(gifs_00..31). 없으면 GIF도 정지 썸네일만 둔다
+//   gifs: GifStore|null,           // 움직이는 GIF 원본(gifs_00..63, store.js createGifStore). 없으면 GIF도 정지 썸네일만 둔다
 //   now() -> ms,
 //   placeAt() -> {x, y},
 //   httpRead(permission, path, query) -> Promise<{bytes: ArrayBuffer, mime}>,   // ingestText만
@@ -23,8 +23,15 @@ const CARD_W = 240;
 const CARD_H = 180;
 const TITLE_MAX = 40;
 // 이 크기(원본 바이트) 이하의 GIF는 원본 base64를 gif 저장소에도 넣어 보드에서 움직인다.
-// base64로 933,336자라 접두를 붙여도 1,000,000바이트 shard 하나에 들어간다.
-export const GIF_ANIM_MAX = 700_000;
+// shard 하나(1MB)에 넘치는 GIF는 GifStore가 여러 shard에 나눠 둔다. 4MB는 base64로 조각 7개다.
+export const GIF_ANIM_MAX = 4_000_000;
+// GIF를 움직이지 못하고 정지 카드로 넣은 까닭(putGif)마다 넣은 뒤 보일 알림.
+export const GIF_STILL_NOTICE = Object.freeze({
+  big: 'GIF가 4MB를 넘어 멈춘 그림으로 넣었어요',
+  frame: 'GIF 화면이 너무 커서(400만 화소 넘음) 멈춘 그림으로 넣었어요',
+  full: '움직이는 GIF 저장 공간이 가득 차서 멈춘 그림으로 넣었어요',
+  failed: 'GIF를 저장하지 못해 멈춘 그림으로 넣었어요',
+});
 const PIN_IMG_HOST = 'i.pinimg.com';
 const PIN_IMG_PREFIXES = ['/originals/', '/1200x/', '/736x/', '/564x/', '/474x/', '/236x/'];
 
@@ -102,21 +109,25 @@ function gifTooBig(bytes) {
   return !!size && size.width * size.height > GIF_MAX_PIXELS;
 }
 
-// 작은 GIF의 원본을 gif 저장소에 넣는다. 넣었으면 참. 차거나 실패하면 정지 카드로 남긴다.
+// GIF 원본을 gif 저장소에 넣는다. 'ok'가 아니면(GIF_STILL_NOTICE의 까닭) 정지 카드로 남긴다.
 async function putGif(deps, cardId, bytes) {
-  if (!deps.gifs || !bytes || bytes.byteLength > GIF_ANIM_MAX || gifTooBig(bytes)) return false;
+  if (!deps.gifs || !bytes) return 'failed';
+  if (bytes.byteLength > GIF_ANIM_MAX) return 'big';
+  if (gifTooBig(bytes)) return 'frame';
   try {
     const r = await deps.gifs.put(cardId, toBase64(bytes));
-    return r?.error !== 'full';
+    return r?.error === 'full' ? 'full' : 'ok';
   } catch {
-    return false;
+    return 'failed';
   }
 }
 
 // --- 파일 ---
 
+// -> {cards, full, stillGif}: stillGif는 움직이지 못한 GIF가 있으면 마지막 까닭(GIF_STILL_NOTICE의 키), 없으면 null.
 export async function ingestFiles(files, deps) {
   const cards = [];
+  let stillGif = null;
   for (const f of files ?? []) {
     if (!f) continue;
     const mime = mimeOf(f);
@@ -142,11 +153,15 @@ export async function ingestFiles(files, deps) {
     let hasThumb = false;
     if (thumb) {
       const r = await putThumb(deps, card.id, thumb.jpegB64);
-      if (r === 'full') return { cards, full: true };
+      if (r === 'full') return { cards, full: true, stillGif };
       hasThumb = r === 'ok';
     }
     // 움직이는 GIF: 정지 썸네일은 그대로 두고 원본을 gif 저장소에 더 넣는다.
-    if (hasThumb && mime === 'image/gif' && (await putGif(deps, card.id, bytes))) card.anim = true;
+    if (hasThumb && mime === 'image/gif') {
+      const why = await putGif(deps, card.id, bytes);
+      if (why === 'ok') card.anim = true;
+      else stillGif = why;
+    }
 
     try {
       await deps.blobPut(card.origKey, f.id);
@@ -160,7 +175,7 @@ export async function ingestFiles(files, deps) {
     if (!hasThumb) card.note = PLACEHOLDER_NOTE;
     cards.push(card);
   }
-  return { cards, full: false };
+  return { cards, full: false, stillGif };
 }
 
 // --- 링크와 글 ---

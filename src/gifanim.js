@@ -3,7 +3,7 @@
 // 순수한 부분(그리기 루프를 돌릴지, 재생 위치, 프레임 길이)은 위쪽에 두고 node 테스트로 확인한다.
 //
 // createGifPlayer({load, onFrame, budgetBytes, useDecoder}) -> {frame, retain, invalidate}
-// - load(cardId) -> Promise<base64|null|undefined>. gif 저장소(gifs_00..31)의 원본. 없으면 정지 썸네일을 그린다.
+// - load(cardId) -> Promise<base64|null|undefined>. gif 저장소(gifs_00..63, createGifStore)의 원본. 없으면 정지 썸네일을 그린다.
 // - onFrame(): 첫 프레임이 준비됐을 때. 다시 그리게 한다.
 // - frame(card, t) -> CanvasImageSource|null: 지금 그릴 프레임. 처음 부르면 그때 읽고 디코드한다(lazy).
 // - retain(ids): 지금 화면에 있는 anim 카드 id. 나머지 카드의 디코더와 프레임 캐시를 놓는다.

@@ -329,12 +329,13 @@ test('작은 GIF: 정지 썸네일과 함께 원본 base64를 gif 저장소에 �
   assert.deepEqual(deps.calls.makeThumb, ['image/gif']);
 });
 
-test('큰 GIF(700,000바이트 넘음)는 정지 카드, gif 저장소에 넣지 않는다', async () => {
+test('큰 GIF(4MB 넘음)는 정지 카드, gif 저장소에 넣지 않고 까닭(big)을 알린다', async () => {
   const gifs = fakeThumbs();
   const big = new Uint8Array(GIF_ANIM_MAX + 1);
   const deps = fakeDeps({ gifs, readBytes: async () => big.buffer });
   const { cards } = await ingestFiles([file('g', 'big.gif', 'image/gif', big.length)], deps);
-  assert.equal(GIF_ANIM_MAX, 700_000);
+  assert.equal(GIF_ANIM_MAX, 4_000_000);
+  assert.equal((await ingestFiles([file('g', 'big.gif', 'image/gif', big.length)], deps)).stillGif, 'big');
   assert.equal(cards[0].hasThumb, true);
   assert.equal('anim' in cards[0], false);
   assert.equal(gifs.puts.length, 0);
@@ -382,4 +383,15 @@ test('GIF 머리가 GIF_MAX_PIXELS를 넘는 크기를 말하면 정지 카드, 
   const deps2 = fakeDeps({ gifs: fakeThumbs(), readBytes: async () => head(2000, 2000).buffer });
   const r2 = await ingestFiles([file('g', 'ok.gif', 'image/gif', 14)], deps2);
   assert.equal(r2.cards[0].anim, true);
+});
+
+test('stillGif: 움직이지 못한 GIF의 까닭을 돌려주고 알림 글이 있다, 움직이면 null', async () => {
+  const { GIF_STILL_NOTICE } = await import('../src/ingest.js');
+  const full = await ingestFiles([file('a', 'a.gif', 'image/gif')], fakeDeps({ gifs: fakeThumbs({ fullAfter: 0 }) }));
+  assert.equal(full.stillGif, 'full');
+  const thrown = await ingestFiles([file('a', 'a.gif', 'image/gif')], fakeDeps({ gifs: { put: async () => { throw new Error('x'); } } }));
+  assert.equal(thrown.stillGif, 'failed');
+  const ok = await ingestFiles([file('a', 'a.gif', 'image/gif')], fakeDeps({ gifs: fakeThumbs() }));
+  assert.equal(ok.stillGif, null);
+  for (const k of ['big', 'frame', 'full', 'failed']) assert.ok(GIF_STILL_NOTICE[k]);
 });

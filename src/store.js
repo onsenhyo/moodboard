@@ -97,10 +97,10 @@ export async function saveWithRetry(adapter, mutate, opts = {}) {
 
 // --- 썸네일 shard ---
 
-// shard id. 썸네일은 thumbs_000..127, 움직이는 GIF는 gifs_00..31. 모양(cardId → "<writtenAtMs>:<base64>")과
+// shard id. 썸네일은 thumbs_000..127, 움직이는 GIF는 gifs_00..63. 모양(cardId → "<writtenAtMs>:<base64>")과
 // 1,000,000바이트 한도는 같고 접두와 자릿수, 개수만 다르다.
 export const THUMB_STORE = Object.freeze({ prefix: 'thumbs_', pad: 3, shards: 128 });
-export const GIF_STORE = Object.freeze({ prefix: 'gifs_', pad: 2, shards: 32 });
+export const GIF_STORE = Object.freeze({ prefix: 'gifs_', pad: 2, shards: 64 });
 export const shardIdFor = (prefix, pad) => (i) => prefix + String(i).padStart(pad, '0');
 export const shardIdOf = shardIdFor(THUMB_STORE.prefix, THUMB_STORE.pad);
 export const gifShardIdOf = shardIdFor(GIF_STORE.prefix, GIF_STORE.pad);
@@ -328,6 +328,74 @@ export async function createThumbStore(adapter, {
     stamps() {
       const out = new Map();
       for (const [cardId, id] of index) out.set(cardId, stampIn(id, cardId));
+      return out;
+    },
+  };
+}
+
+// --- 움직이는 GIF ---
+
+// GifStore. ThumbStore(GIF_STORE) 위에서 1MB shard 하나에 들어가지 않는 GIF 원본을 조각으로 나눠 둔다.
+// - 조각 하나는 base64 partChars자까지다. 한 조각이면 예전처럼 cardId에 base64 그대로 둔다.
+// - 여러 조각이면 cardId에 "<조각 수>|<첫 조각>", 나머지는 "<cardId>~1", "<cardId>~2"…에 둔다(base64에는 '|'와 '~'가 없다).
+//   뒤 조각을 먼저 쓰고 첫 조각을 마지막에 쓰므로, 첫 조각이 보이면 조각이 모두 있다. 쓰다 실패하면 쓴 조각을 걷는다.
+// - get(cardId)은 조각을 이어 붙인 base64다. 조각 하나라도 아직 못 읽었으면 null(shard를 받은 뒤 reload로 다시 읽힌다).
+// - remove와 stamps는 카드 단위다. stamps는 조각 키를 카드 id로 접어, 첫 조각 없이 남은 조각도 orphanMedia가 걷게 한다.
+export const GIF_PART_CHARS = 900_000;
+const PART_SEP = '~';
+const PART_HEAD_RE = /^(\d+)\|/;
+const gifPartKey = (cardId, i) => (i ? `${cardId}${PART_SEP}${i}` : cardId);
+const gifCardOf = (key) => key.split(PART_SEP)[0];
+
+export async function createGifStore(adapter, { partChars = GIF_PART_CHARS, ...opts } = {}) {
+  const inner = await createThumbStore(adapter, { ...GIF_STORE, ...opts });
+  const keysOf = (cardId) => [...inner.stamps().keys()].filter((k) => gifCardOf(k) === cardId);
+
+  async function remove(cardId) {
+    for (const key of keysOf(cardId)) await inner.remove(key);
+  }
+
+  async function put(cardId, b64) {
+    const parts = [];
+    for (let i = 0; i < b64.length || !parts.length; i += partChars) parts.push(b64.slice(i, i + partChars));
+    if (parts.length === 1) return inner.put(cardId, b64);
+    try {
+      for (let i = parts.length - 1; i >= 1; i--) {
+        const r = await inner.put(gifPartKey(cardId, i), parts[i]);
+        if (r?.error) { await remove(cardId); return r; }
+      }
+      const r = await inner.put(cardId, `${parts.length}|${parts[0]}`);
+      if (r?.error) await remove(cardId);
+      return r;
+    } catch (err) {
+      await remove(cardId).catch(() => {});
+      throw err;
+    }
+  }
+
+  return {
+    async get(cardId) {
+      const head = await inner.get(cardId);
+      const m = head && PART_HEAD_RE.exec(head);
+      if (!m) return head;
+      const out = [head.slice(m[0].length)];
+      for (let i = 1; i < Number(m[1]); i++) {
+        const part = await inner.get(gifPartKey(cardId, i));
+        if (!part) return null;
+        out.push(part);
+      }
+      return out.join('');
+    },
+    put,
+    remove,
+    reload: inner.reload,
+    missing: inner.missing,
+    stamps() {
+      const out = new Map();
+      for (const [key, t] of inner.stamps()) {
+        const id = gifCardOf(key);
+        out.set(id, Math.max(out.get(id) ?? 0, t));
+      }
       return out;
     },
   };

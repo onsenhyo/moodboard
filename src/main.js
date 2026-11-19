@@ -6,9 +6,9 @@
 
 import { createPlatform } from './platform/kaleidoscope.js';
 import { newBoard, newGroup, liveGroups, GROUP_DEFAULT_SIZE } from './model.js';
-import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore } from './store.js';
+import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore, createGifStore } from './store.js';
 import { createDocEditor, cardTextPatch, clipText, MEMO_MAX, LABEL_MAX, TEXT_MAX } from './patches.js';
-import { ingestFiles, ingestText } from './ingest.js';
+import { ingestFiles, ingestText, GIF_STILL_NOTICE } from './ingest.js';
 import { makeThumb } from './thumb.js';
 import { placeNear } from './interaction.js';
 import { DROP_STATE, DROP_ACK, createReceiver, dropPlacement } from './dropxfer.js';
@@ -51,7 +51,7 @@ let selectedGroupId = null; // 선택한 묶음. selectedId와 함께 참이 되
 let boardState; // 마지막으로 쓴 창 상태 board
 let notice = null;
 let thumbs = null;
-let gifs = null; // 움직이는 GIF 원본 저장소(gifs_00..31). 준비되기 전에 넣은 GIF는 정지 카드가 된다
+let gifs = null; // 움직이는 GIF 원본 저장소(gifs_00..63, createGifStore). 준비되기 전에 넣은 GIF는 정지 카드가 된다
 let loaded = false; // boards를 한 번이라도 읽었는가
 let loadingNotice = LOADING_NOTICE; // 시작 읽기가 다 끝날 때까지 notice 아래에 깔린다
 const ready = createGate(); // boards와 썸네일 저장소가 준비되면 열린다
@@ -348,7 +348,7 @@ function ingestDeps() {
 }
 
 // 카드는 넣기를 받을 때의 보드(targetId)에 넣는다. 그 사이 그 보드가 지워졌으면 지금 보드에 넣는다.
-function addCards(cards, full, targetId = boardId) {
+function addCards(cards, full, targetId = boardId, stillGif = null) {
   const b = pickBoard(ed.doc, targetId, boardId);
   if (b && cards.length) {
     ed.edit(cards.map((c) => ({ kind: 'card', boardId: b.id, id: c.id, insert: c, t: c.updatedAt })));
@@ -356,6 +356,7 @@ function addCards(cards, full, targetId = boardId) {
     scheduleSave();
   }
   if (full) setNotice(FULL_NOTICE);
+  else if (stillGif) setNotice(GIF_STILL_NOTICE[stillGif]);
   else if (cards.length) clearNotice();
 }
 
@@ -372,8 +373,8 @@ async function onFiles({ event } = {}) {
   if (!files.length) return;
   const target = boardId;
   await ready.run(() => whileIngesting(async () => {
-    const { cards, full } = await ingestFiles(files, ingestDeps());
-    addCards(cards, full, target);
+    const { cards, full, stillGif } = await ingestFiles(files, ingestDeps());
+    addCards(cards, full, target, stillGif);
   }));
 }
 
@@ -431,8 +432,8 @@ async function ingestDropped(f, target) {
       blobPut: (key) => p.blobs.putBytes(key, f.bytes.slice()),
       placeAt: () => dropPlacement({ x: f.x, y: f.y }, f.index),
     };
-    const { cards, full } = await ingestFiles([file], deps);
-    addCards(cards, full, target);
+    const { cards, full, stillGif } = await ingestFiles([file], deps);
+    addCards(cards, full, target, stillGif);
   }));
 }
 
@@ -826,7 +827,7 @@ for (let i = 0; i < GIF_STORE.shards; i++) {
 
 // GIF 저장소는 썸네일과 따로 연다. 시작 알림과 넣기 대기(ready)를 늦추지 않는다.
 async function startGifs() {
-  gifs = await createThumbStore(p.storage, { ...GIF_STORE });
+  gifs = await createGifStore(p.storage);
   for (const [id, value] of pendingGifs) gifs.reload(id, value);
   pendingGifs.clear();
   collectGarbage();

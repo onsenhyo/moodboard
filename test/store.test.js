@@ -645,15 +645,15 @@ test('packThumbs: skip에 든 shard는 고르지 않는다', () => {
 
 // --- 접두와 개수 바꾸기(GIF 저장소) ---
 
-test('createThumbStore: GIF_STORE를 펼치면 gifs_00..31에 쓰고 thumbs_는 건드리지 않는다', async () => {
+test('createThumbStore: GIF_STORE를 펼치면 gifs_00..63에 쓰고 thumbs_는 건드리지 않는다', async () => {
   const { GIF_STORE, gifShardIdOf, shardIdFor } = await import('../src/store.js');
-  assert.deepEqual({ ...GIF_STORE }, { prefix: 'gifs_', pad: 2, shards: 32 });
+  assert.deepEqual({ ...GIF_STORE }, { prefix: 'gifs_', pad: 2, shards: 64 });
   assert.equal(gifShardIdOf(0), 'gifs_00');
-  assert.equal(gifShardIdOf(31), 'gifs_31');
+  assert.equal(gifShardIdOf(63), 'gifs_63');
   assert.equal(shardIdFor('x_', 4)(7), 'x_0007');
   const a = fakeAdapter();
   const s = await createThumbStore(a, { ...GIF_STORE, now: () => 5 });
-  assert.equal(a.gets, 32);
+  assert.equal(a.gets, 64);
   await s.put('c1', 'R0lG');
   assert.deepEqual(a.sets.map(([e]) => e), ['gifs_00']);
   assert.equal(await s.get('c1'), 'R0lG');
@@ -683,4 +683,54 @@ test('ThumbStore.stamps: 카드마다 이기는 사본의 writtenAt', async () =
   const a = fakeAdapter({ thumbs_000: { a: '5:AAA', b: 'BBB' }, thumbs_001: { a: '9:AAA2' } });
   const s = await createThumbStore(a, { shards: 2 });
   assert.deepEqual([...s.stamps()].sort(), [['a', 9], ['b', 0]]);
+});
+
+// --- GifStore ---
+
+const { createGifStore } = await import('../src/store.js');
+const gifEntries = (a) => [...a.data.keys()].filter((k) => k.startsWith('gifs_'));
+
+test('GifStore: 한 shard에 넘치는 GIF를 조각으로 나눠 두고 이어 붙여 읽는다', async () => {
+  const a = fakeAdapter();
+  const s = await createGifStore(a, { partChars: 10, shardLimit: 60, shards: 8 });
+  const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcd'; // 30자 = 조각 3개
+  assert.equal(await s.put('c1', b64), undefined);
+  assert.equal(await s.get('c1'), b64);
+  assert.ok(gifEntries(a).length >= 3, '조각이 여러 shard에 나뉜다');
+  assert.deepEqual([...s.stamps().keys()], ['c1']);
+
+  const again = await createGifStore(a, { partChars: 10, shardLimit: 60, shards: 8 });
+  assert.equal(await again.get('c1'), b64, '다시 연 창도 같은 값을 읽는다');
+
+  await s.remove('c1');
+  assert.equal(await s.get('c1'), null);
+  assert.deepEqual([...s.stamps().keys()], []);
+});
+
+test('GifStore: 한 조각 GIF는 예전 모양(cardId에 base64 그대로)이고, 예전 값도 그대로 읽는다', async () => {
+  const a = fakeAdapter({ gifs_00: { old: '1:R0lGODlh' } });
+  const s = await createGifStore(a, { partChars: 10 });
+  assert.equal(await s.get('old'), 'R0lGODlh');
+  await s.put('c1', 'QUJD');
+  assert.equal(plain(a.data.get('gifs_00')).c1, 'QUJD');
+});
+
+test('GifStore: 저장 공간이 모자라면 full을 돌려주고 쓴 조각을 걷는다', async () => {
+  const a = fakeAdapter();
+  const s = await createGifStore(a, { partChars: 10, shardLimit: 60, shards: 2 });
+  const r = await s.put('c1', 'A'.repeat(50));
+  assert.deepEqual(r, { error: 'full' });
+  assert.equal(await s.get('c1'), null);
+  assert.deepEqual([...s.stamps().keys()], []);
+});
+
+test('GifStore: 조각 하나를 아직 못 읽었으면 null, 첫 조각 없이 남은 조각도 stamps는 카드 id로 접는다', async () => {
+  const a = fakeAdapter({ gifs_00: { c1: '1:2|AAAA' }, gifs_01: { 'c2~1': '7:BBBB' } });
+  const s = await createGifStore(a);
+  assert.equal(await s.get('c1'), null);
+  s.reload('gifs_02', { 'c1~1': '1:CCCC' });
+  assert.equal(await s.get('c1'), 'AAAACCCC');
+  assert.equal(s.stamps().get('c2'), 7);
+  await s.remove('c2');
+  assert.equal(s.stamps().has('c2'), false);
 });

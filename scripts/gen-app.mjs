@@ -11,7 +11,7 @@ import { placeholderHtml } from '../src/boardhtml.js';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ASSET_ID = 'moodboard'; // 진입 로더
 const SHARDS = 128; // src/main.js와 src/board/board.js의 SHARDS와 같아야 한다.
-const GIF_SHARDS = 32; // src/store.js의 GIF_STORE와 같아야 한다.
+const GIF_SHARDS = 64; // src/store.js의 GIF_STORE와 같아야 한다.
 
 // 앱 아이콘(assets/icon.svg, svg 자산). 빌드 산출물이 아니라 dist/assets.json에 없으므로 여기서 더한다.
 // 그림을 바꾸면 판을 1 올린다.
@@ -49,7 +49,7 @@ const cardSchema = {
       additionalProperties: false,
     },
     hasThumb: bool,
-    anim: bool, // 작은 GIF. 원본이 gifs_NN에 있어 보드에서 움직인다. 아니면 필드가 없다
+    anim: bool, // 4MB 이하 GIF. 원본이 gifs_NN에 있어 보드에서 움직인다. 아니면 필드가 없다
     includeVideo: bool,
     updatedAt: num,
     origKey: optStr, // orig/<id>.<ext>, 이 PC의 blobs 키
