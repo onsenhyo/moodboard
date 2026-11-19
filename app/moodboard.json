@@ -85,27 +85,27 @@
     },
     {
       "id": "moodboard-manifest",
-      "version": 3
+      "version": 4
     },
     {
       "id": "moodboard-client-1",
-      "version": 2
+      "version": 3
     },
     {
       "id": "moodboard-client-2",
-      "version": 2
+      "version": 3
     },
     {
       "id": "moodboard-board-js-1",
-      "version": 2
+      "version": 3
     },
     {
       "id": "moodboard-board-js-2",
-      "version": 2
+      "version": 3
     },
     {
       "id": "moodboard-export",
-      "version": 4
+      "version": 5
     },
     {
       "id": "moodboard-icon",
@@ -2732,6 +2732,7 @@
       "zoom_in",
       "zoom_out",
       "zoom_fit",
+      "undo",
       "delete_selected",
       "set_text_color",
       "set_text",
@@ -3077,6 +3078,15 @@
           },
           {
             "type": "button",
+            "label": "되돌리기 (⌘Z, Ctrl+Z)",
+            "icon": "rotate-ccw",
+            "icon_only": true,
+            "on_click": {
+              "client": "undo"
+            }
+          },
+          {
+            "type": "button",
             "label": "색으로 정렬",
             "icon": "paint-bucket",
             "icon_only": true,
@@ -3177,7 +3187,7 @@
             "value": {
               "client": "board_html"
             },
-            "title": "무드보드: 끌어 옮기고, 두 손가락으로 이동, 집어서 확대",
+            "title": "무드보드: 끌어 옮기고, 빈 곳이나 스페이스를 누른 채 끌어 이동, 휠이나 집기로 확대",
             "state_keys": [
               "board",
               "selected",

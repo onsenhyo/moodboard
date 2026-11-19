@@ -206,7 +206,7 @@ const outputs = {
 };
 
 const actions = [
-  'drop', 'pick', 'add_text', 'sort_color', 'sort_manual', 'zoom_in', 'zoom_out', 'zoom_fit',
+  'drop', 'pick', 'add_text', 'sort_color', 'sort_manual', 'zoom_in', 'zoom_out', 'zoom_fit', 'undo',
   'delete_selected', 'set_text_color', 'set_text', 'toggle_include_video', 'board_select', 'board_new',
   'board_rename', 'export', 'group_add', 'group_rename', 'group_delete',
   'set_board_bg', 'reset_board_bg', 'set_text_paper', 'reset_text_paper',
@@ -249,6 +249,8 @@ const toolbar = {
   end: [
     iconBtn('upload', '파일 추가', { pick_files: { accept: FILE_ACCEPT, multiple: true, client: 'pick' } }),
     iconBtn('folder', '묶음 추가', c('group_add')),
+    // 다시 하기는 단추 아이콘이 쉘에 없어 ⌘⇧Z·Ctrl+Y로만 한다.
+    iconBtn('rotate-ccw', '되돌리기 (⌘Z, Ctrl+Z)', c('undo')),
     // 정렬 두 상태: 눌린 쪽이 지금 상태다.
     iconBtn('paint-bucket', '색으로 정렬', c('sort_color'), { variant: 'chip', pressed: c('sorted') }),
     iconBtn('grid-2x2', '내 배치', c('sort_manual'), { variant: 'chip', pressed: c('manual_mode') }),
@@ -395,7 +397,7 @@ const ui = {
         // 쉘 테두리 없이 surface-solid 바탕에 놓인다. 주고받는 창 상태는 BOARD_STATE.
         // sandbox는 assets.bytes를 쓰지 못해 HTML은 client가 만들어 board_html로 낸다(src/boardhtml.js).
         {
-          type: 'sandbox', value: c('board_html'), title: '무드보드: 끌어 옮기고, 두 손가락으로 이동, 집어서 확대',
+          type: 'sandbox', value: c('board_html'), title: '무드보드: 끌어 옮기고, 빈 곳이나 스페이스를 누른 채 끌어 이동, 휠이나 집기로 확대',
           state_keys: BOARD_STATE, storage_entries: storageIds,
         },
         side,
