@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  wheelView, gestureView, deltaPx, stateFromView, viewFromState, createCmdTracker, keyEffect, LINE_PX,
+  wheelView, isMouseWheel, gestureView, deltaPx, stateFromView, viewFromState, createCmdTracker, keyEffect, LINE_PX,
 } from '../src/board/input.js';
 import { MIN_SCALE, MAX_SCALE } from '../src/interaction.js';
 import { toWorld } from '../src/layout.js';
@@ -103,4 +103,43 @@ test('키: Delete·Backspace는 지우기, Esc는 선택 풀기, 수정 키와 �
   assert.equal(keyEffect({ key: 'Delete', editing: true }), null);
   assert.equal(keyEffect({ key: 'a' }), null);
   assert.equal(keyEffect(null), null);
+});
+
+test('isMouseWheel: 트랙패드(wheelDeltaY = -3 × deltaY)와 가로 성분은 마우스가 아니고, 120 단위 휠과 줄 단위는 마우스다', () => {
+  assert.equal(isMouseWheel({ deltaX: 0, deltaY: 4, deltaMode: 0, wheelDeltaY: -12 }), false);
+  assert.equal(isMouseWheel({ deltaX: 2, deltaY: 100, deltaMode: 0, wheelDeltaY: -120 }), false);
+  assert.equal(isMouseWheel({ deltaX: 0, deltaY: 100, deltaMode: 0, wheelDeltaY: -120 }), true);
+  assert.equal(isMouseWheel({ deltaX: 0, deltaY: -125, deltaMode: 0, wheelDeltaY: 120 }), true);
+  assert.equal(isMouseWheel({ deltaX: 0, deltaY: 3, deltaMode: 1 }), true);
+  assert.equal(isMouseWheel({ deltaX: 0, deltaY: 7, deltaMode: 0 }), false);
+});
+
+test('마우스 휠은 커서를 고정하고 확대·축소하며, 한 칸은 약 1.2배다', () => {
+  const at = { x: 300, y: 200 };
+  const before = toWorld(V, at);
+  const v = wheelView(V, { deltaY: -100, mouse: true, ...at }, SIZE);
+  near(v.scale, 2 * Math.exp(0.18));
+  const after = toWorld(v, at);
+  near(after.x, before.x);
+  near(after.y, before.y);
+  assert.ok(wheelView(V, { deltaY: 100, mouse: true, ...at }, SIZE).scale < V.scale);
+  near(wheelView(V, { deltaY: -1000, mouse: true, ...at }, SIZE).scale, v.scale);
+});
+
+test('shift + 마우스 휠은 확대하지 않고 가로로 옮긴다', () => {
+  const v = wheelView({ x: 0, y: 0, scale: 1 }, { deltaY: 30, mouse: true, shiftKey: true, x: 0, y: 0 }, SIZE);
+  assert.deepEqual(v, { x: 30, y: 0, scale: 1 });
+});
+
+test('keyEffect: ⌘Z·Ctrl+Z 되돌리기, 시프트·Ctrl+Y 다시 하기, 한글 입력(key ㅋ)에서도, 편집 중에는 없음', () => {
+  const k = (e) => keyEffect({ key: 'z', code: 'KeyZ', ...e });
+  assert.equal(k({ metaKey: true }), 'undo');
+  assert.equal(k({ ctrlKey: true }), 'undo');
+  assert.equal(k({ ctrlKey: true, key: 'ㅋ' }), 'undo');
+  assert.equal(k({ metaKey: true, shiftKey: true, key: 'Z' }), 'redo');
+  assert.equal(keyEffect({ key: 'y', code: 'KeyY', ctrlKey: true }), 'redo');
+  assert.equal(keyEffect({ key: 'y', code: 'KeyY', metaKey: true }), null);
+  assert.equal(k({ ctrlKey: true, altKey: true }), null);
+  assert.equal(k({}), null);
+  assert.equal(k({ ctrlKey: true, editing: true }), null);
 });

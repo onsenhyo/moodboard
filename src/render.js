@@ -305,10 +305,21 @@ export function createRenderer({ scene, thumbB64, theme = () => THEMES.light, gi
       ctx.font = th.textFont;
       ctx.textBaseline = 'top';
       const lineH = 18;
-      const maxLines = Math.max(1, Math.floor((s.h - pad * 2 - (bar ? 0 : 14)) / lineH));
       const maxW = s.w - pad * 2 - bar;
-      const lines = wrap(ctx, card.text ?? card.title, maxW, maxLines);
-      lines.forEach((l, i) => ctx.fillText(ellipsize(ctx, l, maxW), s.x + bar + pad, s.y + pad + i * lineH));
+      const x = s.x + bar + pad;
+      const label = cardLabel(card);
+      let top = s.y + pad;
+      if (label) {
+        ctx.font = th.textTitleFont;
+        ctx.fillText(ellipsize(ctx, label, maxW), x, top);
+        top += lineH + 4;
+        ctx.font = th.textFont;
+      }
+      const maxLines = Math.floor((s.y + s.h - top - pad - (bar ? 0 : 14)) / lineH);
+      if (maxLines >= 1 || !label) {
+        const lines = wrap(ctx, card.text ?? card.title, maxW, Math.max(1, maxLines));
+        lines.forEach((l, i) => ctx.fillText(ellipsize(ctx, l, maxW), x, top + i * lineH));
+      }
     }
     if (!bar) {
       // 라이트: 색 띠 대신 오른쪽 아래 작은 색 점

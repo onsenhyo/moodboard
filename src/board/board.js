@@ -1,7 +1,7 @@
 // sandbox 보드 진입점(보드 코드 조각 moodboard-board-js-1..N, client가 board_html로 싣는다. src/boardhtml.js). 보드 그리기와 조작을 맡는다.
 //
 // 브리지: window.kaleidoscope (kaleidoscope ui/src/blocks/sandbox-frame.ts)
-// - storage boards, thumbs_000..127, gifs_00..31(움직이는 GIF 원본, gifanim.js)을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).
+// - storage boards, thumbs_000..127, gifs_00..63(움직이는 GIF 원본, store.js createGifStore, gifanim.js)을 직접 읽고, 보드를 바꿀 때 boards에 쓴다(saveWithRetry, CAS 병합).
 // - 창 상태
 //   읽기: board(지금 보드 id, client가 씀), mode('manual'|'sorted'), cmd({op, n}, n이 바뀔 때만 실행), selected,
 //         crop_target({id, n}, n이 바뀌면 그 카드의 자르기 화면을 연다. 사진 카드를 두 번 눌러도 연다), drop_ack
@@ -9,7 +9,9 @@
 //         drop_inbox(끌어 놓은 파일 조각, drop.js)
 // - 보드 편집은 패치로 쌓아(patches.js) 새로 읽은 값에 적용해 쓴다. 손을 뗄 때와 키로 지울 때 바로 저장하고,
 //   창을 닫거나 숨길 때(pagehide, visibilitychange) 남은 패치를 바로 쓴다.
-// - 입력: 포인터(interaction.js), wheel(이동), ctrl+wheel과 gesture*(확대), Delete/Backspace, Esc, 붙여넣기.
+// - 되돌리기: 보드가 받은 문서의 지금 보드를 바뀔 때마다 찍어 두고(history.js), ⌘Z·Ctrl+Z(다시 하기 ⌘⇧Z·Ctrl+Y)와 cmd undo로
+//   그 모양으로 되돌리는 패치를 쓴다. client가 고친 것(옆 칸, 넣기)도 문서로 오므로 함께 되돌린다.
+// - 입력: 포인터(interaction.js), 트랙패드 wheel(이동), 마우스 휠·ctrl+wheel·gesture*(확대), Delete/Backspace, Esc, 붙여넣기.
 
 import { reduce, initialState, zoomAt, fitView, sortCols, rectOf, visibleCards } from '../interaction.js';
 import { sortedLayout, SORT_CELL, SORT_GAP, toWorld, hitTest } from '../layout.js';
@@ -19,14 +21,15 @@ import {
 import { pasteValue } from '../dropxfer.js';
 import { createRenderer } from '../render.js';
 import { THEMES, themeName, boardTheme } from '../theme.js';
-import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore, isConflict } from '../store.js';
+import { BOARDS_ENTRY, shardIdOf, gifShardIdOf, GIF_STORE, createThumbStore, createGifStore, isConflict } from '../store.js';
 import { createGifPlayer } from '../gifanim.js';
 import { createDocEditor } from '../patches.js';
 import { createSaver, retryRead } from '../startup.js';
 import { liveGroups } from '../model.js';
 import { normSelected, deleteCardPatches, deleteGroupPatches } from '../selection.js';
-import { wheelView, gestureView, stateFromView, viewFromState, createCmdTracker, keyEffect } from './input.js';
+import { wheelView, isMouseWheel, gestureView, stateFromView, viewFromState, createCmdTracker, keyEffect } from './input.js';
 import { installDrop } from './drop.js';
+import { boardSnapshot, restorePatches, createHistory } from '../history.js';
 
 const SHARDS = 128;
 const SAVE_RETRY_MS = 3000;
@@ -91,6 +94,7 @@ let viewRestored = false;
 let crop = null;
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 let themeKey = themeName(darkQuery.matches);
+const history = createHistory();
 
 const liveBoards = () => ed.doc.boards.filter((b) => !b.deleted);
 const board = () => liveBoards().find((b) => b.id === boardId) ?? liveBoards()[0] ?? null;
@@ -138,6 +142,8 @@ function targets() {
   return m;
 }
 
+const recordHistory = () => { if (loaded) history.observe(boardSnapshot(board())); };
+
 function refresh(animate) {
   // 다른 보드로 바뀌면(새 보드가 저장소에 늦게 와도) 원점·배율 1에서 본다.
   const id = board()?.id ?? null;
@@ -151,11 +157,25 @@ function refresh(animate) {
   if (crop && !canCrop(cardById(crop.id))) crop = null;
   renderer.setTargets(targets(), animate);
   paintChrome();
+  recordHistory();
 }
 
 function syncUi() {
   ui = { ...ui, cards: liveCards(), groups: liveGroups(board()) };
   renderer.setTargets(targets(), false);
+  recordHistory();
+}
+
+function stepHistory(dir) {
+  if (crop || ui.drag || !loaded) return;
+  const b = board();
+  const target = dir < 0 ? history.undo() : history.redo();
+  if (!b || !target) return;
+  const patches = restorePatches(b, target);
+  if (!patches.length) return;
+  ed.edit(patches);
+  refresh(false);
+  save();
 }
 
 // --- 저장 ---
@@ -315,12 +335,22 @@ canvas.addEventListener('dblclick', (e) => {
 
 // --- 포인터 ---
 
+const PRIMARY = 0, MIDDLE = 1;
+// 스페이스를 누르고 있는 동안은 무엇 위에서 누르든 화면을 옮긴다.
+let spaceHeld = false;
+const setSpaceHeld = (on) => {
+  spaceHeld = on;
+  if (!crop) canvas.style.cursor = on ? 'grab' : '';
+};
+
+// 가운데 단추로 시작한 끌기도 interaction.js에는 주 단추로 넘긴다(buttons & 1만 본다).
 function pointerEvent(phase, e) {
   const r = canvas.getBoundingClientRect();
   return {
     phase, pointer_id: e.pointerId,
     x: (e.clientX - r.left) / Math.max(1, r.width), y: (e.clientY - r.top) / Math.max(1, r.height),
-    buttons: phase === 'up' ? 0 : e.buttons, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey,
+    buttons: phase !== 'up' && e.buttons & 5 ? 1 : 0, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey,
+    pan: phase === 'down' && (e.button === MIDDLE || spaceHeld),
   };
 }
 
@@ -363,8 +393,11 @@ function onPointer(event) {
   if (ui.drag || prevDrag) renderer.redraw();
 }
 
+// 가운데 단추의 기본 동작(자동 스크롤)을 막는다.
+canvas.addEventListener('mousedown', (e) => { if (e.button === MIDDLE) e.preventDefault(); });
 canvas.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0) return;
+  if (e.button !== PRIMARY && e.button !== MIDDLE) return;
+  if (e.button === MIDDLE) { e.preventDefault(); if (crop) return; }
   focusPasteBox();
   try { canvas.setPointerCapture(e.pointerId); } catch { /* 이미 놓친 포인터 */ }
   // 자르기 화면에서는 다른 포인터 조작을 받지 않는다.
@@ -404,7 +437,8 @@ canvas.addEventListener('wheel', (e) => {
   if (e.ctrlKey && gestureBase) return;
   const p = localPoint(e);
   setView(wheelView(ui.view, {
-    deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, x: p.x, y: p.y,
+    deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey,
+    mouse: isMouseWheel(e), x: p.x, y: p.y,
   }, size()));
 }, { passive: false });
 
@@ -443,15 +477,27 @@ window.addEventListener('keydown', (e) => {
   const editing = t === pasteBox
     ? pasteBox.value !== ''
     : t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
-  const fx = keyEffect({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, editing });
+  if (e.key === ' ' && !editing) {
+    e.preventDefault();
+    if (!e.repeat) setSpaceHeld(true);
+    return;
+  }
+  const fx = keyEffect({
+    key: e.key, code: e.code, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, editing,
+  });
   if (!fx) return;
   e.preventDefault();
-  if (fx === 'delete') deleteSelected();
+  if (fx === 'undo') stepHistory(-1);
+  else if (fx === 'redo') stepHistory(1);
+  else if (fx === 'delete') deleteSelected();
   else if (fx === 'clear') {
     if (ui.drag) onPointer({ phase: 'cancel', pointer_id: ui.drag.pointerId });
     select(null);
   }
 });
+
+window.addEventListener('keyup', (e) => { if (e.key === ' ') setSpaceHeld(false); });
+window.addEventListener('blur', () => setSpaceHeld(false));
 
 document.addEventListener('paste', (e) => {
   const text = e.clipboardData?.getData('text/plain') || e.clipboardData?.getData('text') || '';
@@ -482,6 +528,7 @@ function runCmd(op) {
   if (op === 'zoom_in') setView(zoomAt(ui.view, ZOOM_STEP, { x: s.w / 2, y: s.h / 2 }));
   else if (op === 'zoom_out') setView(zoomAt(ui.view, 1 / ZOOM_STEP, { x: s.w / 2, y: s.h / 2 }));
   else if (op === 'fit') setView(fitView([...targets().values()].filter(Boolean), s));
+  else if (op === 'undo') stepHistory(-1);
 }
 
 function applyMode(mode) {
@@ -548,7 +595,7 @@ for (let i = 0; i < GIF_STORE.shards; i++) {
 
 // GIF 저장소는 썸네일과 따로 연다(보드가 늦게 뜨지 않게).
 async function startGifs() {
-  gifs = await createThumbStore(storage, { ...GIF_STORE });
+  gifs = await createGifStore(storage);
   for (const [id, value] of pendingGifs) gifs.reload(id, value);
   pendingGifs.clear();
   gifPlayer.invalidate();
