@@ -2,7 +2,9 @@
 //
 // reduce(state, event) -> {state, effects[]}
 // - event: canvas on_pointer의 arg.event 그대로.
-//   {phase:'down'|'move'|'up'|'cancel', pointer_id, x, y, buttons, shift, alt, ctrl, meta}, x·y는 0~1.
+//   {phase:'down'|'move'|'up'|'cancel', pointer_id, x, y, buttons, shift, alt, ctrl, meta, pan?}, x·y는 0~1.
+//   down의 pan이 참이면(가운데 단추, 스페이스를 누른 채) 무엇 위에서 눌렀든 화면을 옮긴다.
+//   묶음은 제목줄이든 몸통이든 끌면 옮겨지고(안의 카드도 함께), 클릭하면 고른다. 빈 바탕을 끌면 화면을 옮긴다.
 // - state = {
 //     mode: 'manual'|'sorted',
 //     view: {x, y, scale},           // 화면 = (월드 − view.xy) × scale
@@ -62,32 +64,29 @@ function groupDown(state, e, p, hit) {
     pointerId: e.pointer_id, start: p, moved: false, noticed: false, cardId: null,
     groupId: g.id, origView: { ...state.view }, orig: { ...g.rect }, rect: { ...g.rect },
   };
-  if (hit.zone === 'body') return { ...base, kind: 'pan' }; // 끌면 pan, 클릭하면 묶음 선택
   if (hit.zone === 'resize') return { ...base, kind: 'group_resize' };
   const cards = members(state, g.id);
   return { ...base, kind: 'group', toggle: hit.zone === 'toggle', origCards: cards, cards };
 }
 
+function panDrag(state, e, p) {
+  return { kind: 'pan', pointerId: e.pointer_id, start: p, moved: false, noticed: false, cardId: null, orig: null, origView: { ...state.view }, rect: null };
+}
+
 function onDown(state, e) {
   const p = toPx(state, e);
+  if (e.pan) return { state: { ...state, drag: panDrag(state, e, p) }, effects: [] };
   const world = toWorld(state.view, p);
   const hit = hitTest(visibleCards(state), (c) => rectOf(state, c), world, state.view.scale);
   if (!hit && state.mode !== 'sorted') {
     const g = hitTestGroup(state.groups, world, state.view.scale);
     if (g) return { state: { ...state, drag: groupDown(state, e, p, g) }, effects: [] };
   }
-  let kind = 'pan';
-  if (hit) kind = state.mode === 'sorted' ? 'blocked' : hit.zone === 'resize' ? 'resize' : 'card';
+  if (!hit) return { state: { ...state, drag: panDrag(state, e, p) }, effects: [] };
+  const kind = state.mode === 'sorted' ? 'blocked' : hit.zone === 'resize' ? 'resize' : 'card';
+  const rect = rectOf(state, hit.card);
   const drag = {
-    kind,
-    pointerId: e.pointer_id,
-    start: p,
-    moved: false,
-    noticed: false,
-    cardId: hit?.card.id ?? null,
-    orig: hit ? { ...rectOf(state, hit.card) } : null,
-    origView: { ...state.view },
-    rect: hit ? { ...rectOf(state, hit.card) } : null,
+    ...panDrag(state, e, p), kind, cardId: hit.card.id, orig: { ...rect }, rect: { ...rect },
   };
   return { state: { ...state, drag }, effects: [] };
 }

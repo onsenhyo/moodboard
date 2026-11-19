@@ -2,15 +2,19 @@
 //
 // view = {x, y, scale}: interaction.js와 같은 모양(화면 = (월드 − view.xy) × scale).
 // wheelView(view, e, size) -> view
-//   e = {deltaX, deltaY, deltaMode, ctrlKey, shiftKey, x, y}. x·y는 표면 안 CSS px.
+//   e = {deltaX, deltaY, deltaMode, ctrlKey, shiftKey, mouse, x, y}. x·y는 표면 안 CSS px.
 //   deltaMode 0은 px, 1은 줄(16px), 2는 쪽(표면 높이·폭). ctrl은 집기(트랙패드 핀치)라서 커서를 고정하고 확대한다.
-//   ctrl 없는 wheel은 이동이다. shift만 누르고 deltaX가 0이면 deltaY를 가로로 쓴다(마우스 휠).
+//   mouse(isMouseWheel)는 마우스 휠 한 칸이라서 커서를 고정하고 확대한다. shift를 누르면 확대 대신 가로로 옮긴다.
+//   나머지(트랙패드 두 손가락)는 이동이다. shift만 누르고 deltaX가 0이면 deltaY를 가로로 쓴다.
+// isMouseWheel(e) -> boolean: e = {deltaX, deltaY, deltaMode, wheelDeltaY}. 트랙패드는 wheelDeltaY가 -3 × deltaY로
+//   오고(Chromium, WebKit) 마우스 휠은 120 단위로 온다. wheelDeltaY가 없으면(Firefox) 줄 단위를 마우스로 본다.
 // gestureView(view, base, e, size) -> view
 //   WebKit gesturestart/gesturechange. base는 gesturestart 때의 scale, e.scale은 그때부터의 배수다.
 // stateFromView / viewFromState: 창 상태 view {cx, cy, scale}(화면 가운데의 월드 좌표)와 바꾼다.
 // createCmdTracker(initial) -> (cmd) -> op|null: cmd {op, n}의 n이 바뀔 때만 op를 돌려준다.
 //   처음 값(창을 다시 열 때 남은 cmd)은 실행하지 않는다.
-// keyEffect(e) -> 'delete'|'clear'|null: e = {key, metaKey, ctrlKey, altKey, editing}.
+// keyEffect(e) -> 'delete'|'clear'|'undo'|'redo'|null: e = {key, code, metaKey, ctrlKey, altKey, shiftKey, editing}.
+//   ⌘Z·Ctrl+Z 되돌리기, ⌘⇧Z·Ctrl+Shift+Z·Ctrl+Y 다시 하기. 한글 입력 중에도 되게 key 대신 code(KeyZ·KeyY)를 본다.
 
 import { zoomAt, MIN_SCALE, MAX_SCALE } from '../interaction.js';
 
@@ -19,6 +23,9 @@ export const LINE_PX = 16;
 export const PINCH_K = 0.01;
 // 마우스 휠 한 칸(약 100px)이 너무 크게 확대하지 않게 한 번에 쓰는 delta를 자른다.
 const PINCH_MAX_DELTA = 50;
+// 마우스 휠 한 칸(100px)이 약 1.2배가 되는 세기. 가속으로 큰 delta가 와도 한 칸만큼만 쓴다.
+export const MOUSE_ZOOM_K = 0.0018;
+const MOUSE_MAX_DELTA = 100;
 
 const clampScale = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 
@@ -32,12 +39,23 @@ export function deltaPx(e, size) {
   return { dx, dy };
 }
 
+export function isMouseWheel(e) {
+  if ((e.deltaMode | 0) !== 0) return true;
+  if (Number(e.deltaX)) return false;
+  const w = Number(e.wheelDeltaY);
+  if (!w) return false;
+  return w !== -3 * Number(e.deltaY) && w % 120 === 0;
+}
+
+const clampAbs = (v, max) => Math.max(-max, Math.min(max, v));
+
 export function wheelView(view, e, size) {
   const { dx, dy } = deltaPx(e, size);
-  if (e.ctrlKey) {
-    const d = Math.max(-PINCH_MAX_DELTA, Math.min(PINCH_MAX_DELTA, dy));
+  const zoomK = e.ctrlKey ? PINCH_K : e.mouse && !e.shiftKey ? MOUSE_ZOOM_K : 0;
+  if (zoomK) {
+    const d = clampAbs(dy, e.ctrlKey ? PINCH_MAX_DELTA : MOUSE_MAX_DELTA);
     if (!d) return view;
-    return zoomAt(view, Math.exp(-d * PINCH_K), { x: e.x, y: e.y });
+    return zoomAt(view, Math.exp(-d * zoomK), { x: e.x, y: e.y });
   }
   if (!dx && !dy) return view;
   return { x: view.x + dx / view.scale, y: view.y + dy / view.scale, scale: view.scale };
@@ -82,6 +100,10 @@ export function createCmdTracker(initial) {
 export function keyEffect(e) {
   if (!e || e.editing) return null;
   if (e.key === 'Escape') return 'clear';
+  if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+    if (e.code === 'KeyZ') return e.shiftKey ? 'redo' : 'undo';
+    if (e.code === 'KeyY' && e.ctrlKey && !e.shiftKey) return 'redo';
+  }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !e.metaKey && !e.ctrlKey && !e.altKey) return 'delete';
   return null;
 }

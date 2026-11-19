@@ -57,6 +57,7 @@ function themeCss(t) {
     `.card .badge{left:${pad + 6}px;top:${pad + 6}px;background:${t.badgeBg};color:${t.badgeInk};font:${t.badgeFont}}`,
     `.card.text{background:${t.textBg};color:${t.textInk};box-shadow:${lined(t.textBorder)}}`,
     `.card.text .ph{font:${t.textFont};line-height:1.35;padding-left:${14 + (t.textAccentBar ? t.textAccentWidth : 0)}px}`,
+    `.card.text .ph b{display:block;font:${t.textTitleFont};margin-bottom:4px}`,
     `.card .accent{display:${t.textAccentBar ? 'block' : 'none'};width:${t.textAccentWidth}px}`,
     `.card .tdot{display:${t.textAccentBar ? 'none' : 'block'}}`,
     `.card.link{background:${t.linkBg};color:${t.linkInk};box-shadow:${lined(t.linkBorder)}}`,
@@ -237,7 +238,9 @@ function start() {
       }
     } else if (type === 'text') {
       n.append(el('span', { class: 'accent', style: `background:${color}` }));
-      n.append(el('div', { class: 'ph', text: c.text ?? '' }));
+      const ph = el('div', { class: 'ph' }, label ? el('b', { text: label }) : null);
+      ph.append(c.text ?? '');
+      n.append(ph);
       n.append(el('span', { class: 'tdot', style: `background:${color}` }));
       if (c.paper) paperNodes.push([n, c]);
     } else if (type === 'link') {

@@ -446,12 +446,13 @@ function setMode(next) {
 p.handle('sort_color', () => setMode('sorted'));
 p.handle('sort_manual', () => setMode('manual'));
 
-// 확대와 맞춤은 sandbox가 한다. n은 같은 단추를 다시 눌러도 바뀌게 하는 번호다.
+// 확대, 맞춤, 되돌리기는 sandbox가 한다(되돌리기 기록은 보드가 가진다, src/history.js). n은 같은 단추를 다시 눌러도 바뀌게 하는 번호다.
 let cmdSeq = 0;
 const sendCmd = (op) => p.setState('cmd', { op, n: Date.now() * 1000 + (cmdSeq++ % 1000) });
 p.handle('zoom_in', () => sendCmd('zoom_in'));
 p.handle('zoom_out', () => sendCmd('zoom_out'));
 p.handle('zoom_fit', () => sendCmd('fit'));
+p.handle('undo', () => sendCmd('undo'));
 
 // --- 묶음 ---
 

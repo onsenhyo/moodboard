@@ -52,6 +52,7 @@ function make(k, o) {
     textBg: o.textBg,
     textInk: k.text,
     textFont: `13px ${UI}`,
+    textTitleFont: `600 14px ${UI}`, // 글 카드에 붙인 이름(label). 본문 위 한 줄
     textBorder: o.textBorder,
     textAccentBar: true,
     textAccentWidth: 3,

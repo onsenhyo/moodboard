@@ -189,12 +189,24 @@ test('묶음 제목줄·몸통 클릭은 select {groupId}', () => {
   assert.deepEqual(body.effects, [{ type: 'select', cardId: null, groupId: 'g' }]);
 });
 
-test('묶음 몸통을 끌면 pan', () => {
+test('묶음 몸통을 끌어도 묶음과 안의 카드가 옮겨지고 화면은 그대로다', () => {
   const s0 = gbase();
   const { state, effects } = run(s0, [ev('down', 700, 350), ev('move', 680, 340), ev('up', 680, 340)]);
-  assert.deepEqual(effects, []);
-  assert.deepEqual(state.view, { x: 20, y: 10, scale: 1 });
-  assert.deepEqual(state.groups, s0.groups);
+  assert.equal(effects.length, 1);
+  assert.equal(effects[0].type, 'group_moved');
+  assert.deepEqual(effects[0].rect, { x: 380, y: 90, w: 400, h: 300 });
+  assert.deepEqual(effects[0].cards.map(c => c.rect.x), [430, 580]);
+  assert.deepEqual(state.view, s0.view);
+});
+
+test('pan을 붙여 누르면 카드나 묶음 위에서도 화면만 옮긴다', () => {
+  const s0 = gbase();
+  for (const [x, y] of [[700, 350], [470, 220], [700, 110]]) {
+    const down = { ...ev('down', x, y), pan: true };
+    const { state, effects } = run(s0, [down, ev('move', x - 20, y - 10), ev('up', x - 20, y - 10)]);
+    assert.deepEqual(effects, []);
+    assert.deepEqual(state.view, { x: 20, y: 10, scale: 1 });
+  }
 });
 
 test('묶음 안의 카드가 묶음보다 먼저 맞는다', () => {
